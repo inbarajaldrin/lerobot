@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** Phase 5 — Pick-and-Place Capture + Schema Parity
+**Current focus:** User-directed add-on before v1 milestone can be closed
 
 ## Current Position
 
-Phase: 5 of 5 (Pick-and-Place + Schema Parity)
-Plan: — (not yet planned)
-Status: Phase 4 complete; Phase 5 ready to plan
-Last activity: 2026-04-23 — Phase 4 shipped (v3 dataset on disk + HF Hub, schema equality vs real target PASS, rerun integration live)
+Phase: 5 of 5 (Capture + Schema Parity) — 2/3 + 1 deferred
+Plan: —
+Status: Phase 5 planned work shipped (VER-01 + VER-03). VER-02 deferred to V2-LINUX-PICK-PLACE. User has one more item to add before v1 milestone sign-off — NOT calling the milestone complete yet.
+Last activity: 2026-04-23 — Phase 5 runbook + verify_parity.py + base-yaw motion-test dataset shipped; schema parity PASS vs real target; VER-02 moved to V2-LINUX-PICK-PLACE
 
-Progress: [████████░░] 86% (12/14 plans complete)
+Progress: [█████████░] 93% (14/14 planned plans + 1 V2 follow-up)
 
 ## Performance Metrics
 
@@ -106,7 +106,9 @@ Resume file: None — read the docs listed below.
 - rerun-sdk installed; `--display_data=true` spawns live viewer during record; `lerobot-dataset-viz` for post-hoc
 - gitignore hardened for tokens/.env; tokens live at `~/.cache/huggingface/token`
 
-**Phase 5 prep:**
-- Author `verify_parity.py` (VER-01) comparing our dataset's `meta.features` + `info.json` against `arjunsinghyadav2/blue_sort_black_bg_colored_cups_v1_440ep`. Core asserts already prototyped inline during 04-04 — promote to a reusable CI-style script.
-- User drives control_gui to capture a real pick-and-place episode (VER-02). `record_sim.sh --dataset.push_to_hub=true` handles it end-to-end once the task is framed.
-- Full-stack reproducible runbook (VER-03) — update LEROBOT_ROS2_MAC_SETUP.md with the exact commands.
+**Phase 5 delivered (2026-04-23):**
+- 05-01: `verify_parity.py` — exit 0 on our two shipped datasets vs real target.
+- 05-02: Automated motion-test recording via `drive_base_yaw_sweep.py`; `so_arm101_sim_base_yaw_v0` on Hub with schema parity PASS. Strict pick-and-place deferred to V2-LINUX-PICK-PLACE (blocked on Mac by Gazebo contact physics).
+- 05-03: "Record a dataset from scratch" runbook added to LEROBOT_ROS2_MAC_SETUP.md with ordered commands + troubleshooting table.
+
+**Paused at:** user signalled there's one more item to add before the v1 milestone can be closed. NOT invoking milestone-complete workflow until the user says what it is.
