@@ -84,32 +84,32 @@ Deferred to a follow-up milestone.
 
 | Requirement | Phase | Status |
 |---|---|---|
-| FOUND-01 | — | Pending |
-| FOUND-02 | — | Pending |
-| FOUND-03 | — | Pending |
-| FOUND-04 | — | Pending |
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| OBS-03 | — | Pending |
-| OBS-04 | — | Pending |
-| ACT-01 | — | Pending |
-| ACT-02 | — | Pending |
-| DATA-01 | — | Pending |
-| DATA-02 | — | Pending |
-| DATA-03 | — | Pending |
-| DATA-04 | — | Pending |
-| CLI-01 | — | Pending |
-| CLI-02 | — | Pending |
-| CLI-03 | — | Pending |
-| HUB-01 | — | Pending |
-| VER-01 | — | Pending |
-| VER-02 | — | Pending |
-| VER-03 | — | Pending |
+| FOUND-01 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
+| FOUND-02 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
+| FOUND-03 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
+| FOUND-04 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
+| OBS-03 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
+| OBS-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| OBS-02 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| OBS-04 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| ACT-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| ACT-02 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| CLI-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| DATA-01 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| DATA-02 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| DATA-03 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| DATA-04 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| CLI-02 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| CLI-03 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| HUB-01 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
+| VER-01 | Phase 5 — Pick-and-Place + Schema Parity | Pending |
+| VER-02 | Phase 5 — Pick-and-Place + Schema Parity | Pending |
+| VER-03 | Phase 5 — Pick-and-Place + Schema Parity | Pending |
 
 **Coverage:**
 - v1 requirements: 21 total
-- Mapped to phases: 0 ⚠️ (pending roadmapper)
-- Unmapped: 21 ⚠️
+- Mapped to phases: 21 ✓
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-23*
