@@ -60,6 +60,7 @@ Deferred to a follow-up milestone.
 ### Real-side ROS2 (optional convergence)
 
 - **V2-REAL-01**: Publish real SO-101 camera feeds as ROS2 topics (usb_cam + realsense2_camera) so real-side can also use `--mode sim` plugins — fully unified code path. Keeps colleague's Windows flow as-is unless they opt in.
+- **V2-REAL-UNIFIED**: Extend the real-hardware ROS2 bridge (`jointstatereader`) so the same so101_ros2 plugin pipeline captures real datasets. Key insight from Phase 5 audit: `jointstatereader` already reads Feetech leader/follower servos at 20 Hz and publishes `/joint_states`. To unify with the sim flow, it needs to additionally publish leader positions on `/joint_commands` (matches upstream `so_leader` teleop semantics), plus a pair of `usb_cam`/`realsense2_camera` ROS2 nodes wrapping the physical cameras on `/wrist_camera` + `/top_camera`. Zero plugin code changes — `record_sim.sh` + `verify_parity.py` work unchanged. Scope: ~5 plans, ~40 lines of Python in jointstatereader + launch/config files in vla_SO-ARM101 + docs. Requires real hardware for testing (Linux follow-up ideal).
 
 ### Pick-and-place capture (Linux / IsaacSim follow-up)
 
