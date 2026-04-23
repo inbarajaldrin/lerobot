@@ -57,6 +57,17 @@ class SO101ROS2RobotConfig(RobotConfig):
     state_timeout_s: float = 5.0
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
+    # Schema-parity knobs (see .planning/real_dataset_probe/PARITY_CONTRACT.md).
+    # `use_degrees=True` multiplies incoming /joint_states.position by 180/π so
+    # observation.state / action columns match upstream's `so_follower` default
+    # (which records in degrees). Set False for debugging in radians.
+    use_degrees: bool = True
+    # `robot_type`, when set, overrides the value written into dataset
+    # meta/info.json (normally taken from Robot.name = "so101_ros2"). Set to
+    # "so_follower" for parity recordings so schema-equality with the real HF
+    # dataset holds.
+    robot_type: str | None = None
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if not self.joint_states_topic:

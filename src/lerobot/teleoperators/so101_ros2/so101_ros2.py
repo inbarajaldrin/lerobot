@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
+
+_RAD_TO_DEG = 180.0 / math.pi
 
 from lerobot.cameras.ros2 import ROS2Camera
 from lerobot.types import RobotAction
@@ -140,12 +143,15 @@ class SO101ROS2Teleoperator(Teleoperator):
                     self, self.config.action_topic, warmed)
 
     def _on_action(self, msg: Any) -> None:
-        """Spin-thread callback. Same remap pattern as SO101ROS2Robot."""
+        """Spin-thread callback. Same remap + radians→degrees conversion as
+        SO101ROS2Robot so the dataset's action column matches observation.state
+        units."""
         name_map = self.config.joint_name_map
+        factor = _RAD_TO_DEG if self.config.use_degrees else 1.0
         remapped: dict[str, float] = {}
         for raw_name, pos in zip(msg.name, msg.position, strict=False):
             canonical = name_map.get(raw_name, raw_name)
-            remapped[canonical] = float(pos)
+            remapped[canonical] = float(pos) * factor
         with self._action_lock:
             self._latest_action = remapped
             self._latest_action_time = time.monotonic()

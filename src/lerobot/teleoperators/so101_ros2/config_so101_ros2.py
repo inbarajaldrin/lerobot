@@ -57,6 +57,11 @@ class SO101ROS2TeleoperatorConfig(TeleoperatorConfig):
     joint_names: list[str] = field(default_factory=_default_joint_names)
     joint_name_map: dict[str, str] = field(default_factory=_default_joint_name_map)
 
+    # Schema parity (see .planning/real_dataset_probe/PARITY_CONTRACT.md).
+    # Matches the Robot plugin's `use_degrees=True`; keeps the action column
+    # in the same units as observation.state.
+    use_degrees: bool = True
+
     # How long connect() waits for the first message. Unlike the Robot's
     # state_timeout_s, a missing initial action is non-fatal — the controls
     # owner may legitimately come up after the teleop subscriber. We log a

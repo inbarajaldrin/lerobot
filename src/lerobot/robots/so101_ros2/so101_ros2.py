@@ -17,10 +17,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
+
+_RAD_TO_DEG = 180.0 / math.pi
 
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.cameras.ros2 import ROS2Camera
@@ -83,6 +86,13 @@ class SO101ROS2Robot(Robot):
         super().__init__(config)
         self.config = config
         self._is_connected: bool = False
+
+        # Parity override: dataset meta/info.json takes robot_type from
+        # self.robot_type (set to self.name by Robot.__init__). Overwrite
+        # AFTER super().__init__() so calibration paths (which use self.name)
+        # aren't affected.
+        if config.robot_type is not None:
+            self.robot_type = config.robot_type
 
         # Shared rclpy resources — populated on connect.
         self._node: Any = None
@@ -181,14 +191,17 @@ class SO101ROS2Robot(Robot):
                     self, sorted(self._latest_state or {}))
 
     def _on_joint_state(self, msg: Any) -> None:
-        """Spin-thread callback. Remaps names via cfg.joint_name_map and
-        caches the latest state so get_observation never blocks on ROS."""
+        """Spin-thread callback. Remaps names via cfg.joint_name_map, converts
+        radians→degrees when use_degrees is set (parity with upstream
+        SOFollowerConfig's use_degrees=True default), and caches the latest
+        state so get_observation never blocks on ROS."""
         name_map = self.config.joint_name_map
+        factor = _RAD_TO_DEG if self.config.use_degrees else 1.0
         remapped: dict[str, float] = {}
         # JointState.name and .position are parallel arrays.
         for raw_name, pos in zip(msg.name, msg.position, strict=False):
             canonical = name_map.get(raw_name, raw_name)
-            remapped[canonical] = float(pos)
+            remapped[canonical] = float(pos) * factor
         with self._state_lock:
             self._latest_state = remapped
             self._latest_state_time = time.monotonic()
