@@ -58,7 +58,6 @@ from lerobot.utils.decorators import (
 )
 from lerobot.utils.errors import DeviceNotConnectedError
 from lerobot.utils.import_utils import (
-    _cv_bridge_available,
     _rclpy_available,
     require_package,
 )
@@ -67,16 +66,65 @@ from ..camera import Camera
 from ..configs import ColorMode, Cv2Rotation
 from .configuration_ros2 import ROS2CameraConfig
 
-if TYPE_CHECKING or (_rclpy_available and _cv_bridge_available):
+if TYPE_CHECKING or _rclpy_available:
     import rclpy  # type: ignore
     import rclpy.node  # type: ignore
     import rclpy.subscription  # type: ignore
-    from cv_bridge import CvBridge  # type: ignore
     from sensor_msgs.msg import Image as ImageMsg  # type: ignore
 else:
     rclpy = None  # type: ignore
-    CvBridge = None  # type: ignore
     ImageMsg = None  # type: ignore
+
+
+# Mapping from ROS 2 sensor_msgs/Image encoding → (numpy dtype, channels, is_rgb_order).
+# Covers the encodings lerobot users are likely to hit. See
+# https://docs.ros.org/en/jazzy/p/sensor_msgs/msg/Image.html and
+# sensor_msgs/image_encodings.hpp for the full list.
+_ENCODING_TABLE: dict[str, tuple[str, int, bool]] = {
+    # 8-bit color
+    "rgb8": ("uint8", 3, True),
+    "bgr8": ("uint8", 3, False),
+    "rgba8": ("uint8", 4, True),
+    "bgra8": ("uint8", 4, False),
+    # 16-bit color
+    "rgb16": ("uint16", 3, True),
+    "bgr16": ("uint16", 3, False),
+    # grayscale
+    "mono8": ("uint8", 1, True),
+    "mono16": ("uint16", 1, True),
+    # depth-style
+    "16uc1": ("uint16", 1, True),
+    "32fc1": ("float32", 1, True),
+}
+
+
+def _image_msg_to_ndarray(msg: Any, requested_encoding: str) -> NDArray[Any]:
+    """Decode a `sensor_msgs/Image` message to a numpy array without cv_bridge.
+
+    cv_bridge's conda binaries are compiled against numpy 1.x and break on
+    numpy>=2. This function replaces it with a pure-numpy reshape based on
+    the encoding metadata, which works under any numpy ABI.
+
+    `requested_encoding == "passthrough"` uses `msg.encoding`; otherwise the
+    caller-requested encoding is used for layout (mismatch logs a warning
+    but still reshapes to the caller's expected channel count).
+    """
+    effective_encoding = msg.encoding if requested_encoding == "passthrough" else requested_encoding
+    effective_encoding = (effective_encoding or "").lower()
+
+    if effective_encoding not in _ENCODING_TABLE:
+        raise ValueError(
+            f"Unsupported sensor_msgs/Image encoding '{effective_encoding}'. "
+            f"Supported: {sorted(_ENCODING_TABLE)}."
+        )
+    dtype_str, channels, _ = _ENCODING_TABLE[effective_encoding]
+
+    buf = np.frombuffer(msg.data, dtype=np.dtype(dtype_str))
+    if channels == 1:
+        arr = buf.reshape(msg.height, msg.width)
+    else:
+        arr = buf.reshape(msg.height, msg.width, channels)
+    return arr
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +186,11 @@ class ROS2Camera(Camera):
     _rclpy_node: ClassVar[Any | None] = None
     _spin_thread: ClassVar[threading.Thread | None] = None
     _stop_event: ClassVar[threading.Event | None] = None
-    _cv_bridge: ClassVar[Any | None] = None
     _subscriptions: ClassVar[dict[str, _ROS2CameraTopic]] = {}
     _class_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, config: ROS2CameraConfig) -> None:
         require_package("rclpy", extra="ros2", import_name="rclpy")
-        require_package("cv_bridge", extra="ros2", import_name="cv_bridge")
 
         super().__init__(config)
 
@@ -176,8 +222,6 @@ class ROS2Camera(Camera):
             if cls._rclpy_node is None:
                 cls._rclpy_node = rclpy.create_node("lerobot_ros2_camera_node")
                 cls._stop_event = threading.Event()
-            if cls._cv_bridge is None:
-                cls._cv_bridge = CvBridge()
             if cls._spin_thread is None or not cls._spin_thread.is_alive():
                 assert cls._stop_event is not None
                 cls._stop_event.clear()
@@ -217,7 +261,6 @@ class ROS2Camera(Camera):
                     pass
                 cls._rclpy_initialized = False
             cls._stop_event = None
-            cls._cv_bridge = None
 
     # --------------------------------------------------------------- contract
 
@@ -311,12 +354,9 @@ class ROS2Camera(Camera):
     # ------------------------------------------------------------------ read
 
     def _msg_to_ndarray(self, msg: Any) -> NDArray[np.uint8]:
-        cls = type(self)
-        assert cls._cv_bridge is not None
-        img = cls._cv_bridge.imgmsg_to_cv2(msg, self.config.encoding)
+        img = _image_msg_to_ndarray(msg, self.config.encoding)
 
-        # cv_bridge returns BGR or RGB depending on encoding; normalize to
-        # the requested color mode.
+        # Normalize color ordering to the requested color_mode.
         if img.ndim == 3 and img.shape[2] == 3:
             msg_encoding = (msg.encoding or "").lower()
             if msg_encoding in {"rgb8", "rgb16"} and self.color_mode == ColorMode.BGR:
