@@ -71,6 +71,27 @@ Items acknowledged and carried forward from the v2 list:
 
 ## Session Continuity
 
-Last session: 2026-04-23 Phase 2 execution (same session as Phase 1)
-Stopped at: Phase 2 code shipped on Exploring-VLAs main (top camera in gazebo.xacro + bridge in gazebo.launch.py). Phase 1+2 commits local only, not pushed. Ready for Phase 3 planning.
-Resume file: None
+Last session: 2026-04-23 (Phase 1 + Phase 2 + runtime verification, one long session)
+Stopped at: Phase 2 fully shipped AND runtime-verified on Mac. User confirmed Gazebo shows robot + cameras work in RViz. Session paused before Phase 3 with a handoff prompt.
+Resume file: None — read the docs listed below.
+
+**For next session, READ THESE FIRST (in this order):**
+1. `.planning/PROJECT.md` — what we're building, decisions already made
+2. `.planning/ROADMAP.md` — 5 phases; Phases 1+2 complete, Phase 3 is next
+3. `.planning/REQUIREMENTS.md` — 21 v1 reqs, 5 complete, traceability table
+4. `.planning/phases/01-rebase-port-ros2-camera/SUMMARY.md` — what Phase 1 shipped + gotchas caught
+5. `.planning/phases/02-sim-parity-top-camera/SUMMARY.md` — what Phase 2 shipped + runtime results
+6. `../vla_SO-ARM101/docs/LEROBOT_ROS2_MAC_SETUP.md` — the living Mac runbook (bootstrap, scripts, runtime env vars, Phase changelog)
+7. `../vla_SO-ARM101/docs/pipeline_diagram.html` (open in browser) — target pipeline + gap list
+8. `.planning/codebase/{ARCHITECTURE,STACK,STRUCTURE,CONCERNS}.md` — upstream lerobot codebase map
+
+**Known issues carried forward (NOT blockers for Phase 3 planning):**
+- `controller_manager` logs "No clock received, using time argument instead" continuously during sim. The `joint_state_broadcaster` spawner (`spawner-6`) crashed with an importlib error ("controller_manager==4.43.0 spawner entry point"). Topics `/joint_states` still show in `ros2 topic list` — so something downstream publishes them — but actual rate sampling showed 0 Hz over 3 s with default QoS (possibly QoS mismatch or no clock propagation). Needs diagnosis in Phase 3 before recording.
+- `pick-ik` is not on RoboStack osx-arm64. MoveIt planning will fail or fall back; topic-level verification works without it. Source-build of `pick-ik` is a separate follow-up, not currently in any phase.
+
+**Phase 3 plan (waiting for user to unpause):**
+- 03-01: scaffold `Exploring-VLAs/lerobot_robot_so101_ros2/` BYOH package
+- 03-02: implement Robot subscribing to /joint_states + /wrist_camera + /top_camera
+- 03-03: scaffold `Exploring-VLAs/lerobot_teleoperator_so101_ros2/` subscribing to /joint_commands (already publishes in the current stack)
+- 03-04: `--mode sim|real` CLI shim in `mac-env/scripts/`
+- Midway checkpoint after 03-02: verify Robot plugin with `lerobot-teleoperate --robot.type=so101_ros2` against live Gazebo.
