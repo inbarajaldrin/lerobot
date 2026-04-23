@@ -126,6 +126,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     openarm_follower,
     reachy2,
+    so101_ros2,  # fork-internal plugin (Phase 3) — registers @RobotConfig.register_subclass
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
@@ -141,6 +142,7 @@ from lerobot.teleoperators import (  # noqa: F401
     openarm_leader,
     openarm_mini,
     reachy2_teleoperator,
+    so101_ros2 as so101_ros2_teleop,  # fork-internal plugin (Phase 3)
     so_leader,
     unitree_g1,
 )
