@@ -87,12 +87,19 @@ class SO101ROS2Robot(Robot):
         self.config = config
         self._is_connected: bool = False
 
-        # Parity override: dataset meta/info.json takes robot_type from
-        # self.robot_type (set to self.name by Robot.__init__). Overwrite
-        # AFTER super().__init__() so calibration paths (which use self.name)
-        # aren't affected.
+        # Parity override for the dataset's meta/info.json. lerobot-record
+        # writes `robot_type` from two different attrs depending on path:
+        #   - lerobot_record.py:549  LeRobotDataset.create(..., robot_type=robot.name)
+        #     (teleop path — ours)
+        #   - lerobot_record.py:398,424  predict_action(robot_type=robot.robot_type)
+        #     (policy-driven path)
+        # Override both AFTER super().__init__() so calibration_dir (computed
+        # in the base from self.name) stays scoped to our plugin's own
+        # directory tree, but the dataset written to disk carries the
+        # parity-compatible value (e.g. "so_follower").
         if config.robot_type is not None:
             self.robot_type = config.robot_type
+            self.name = config.robot_type
 
         # Shared rclpy resources — populated on connect.
         self._node: Any = None
