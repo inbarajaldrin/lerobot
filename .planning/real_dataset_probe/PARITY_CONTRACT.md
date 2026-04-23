@@ -50,15 +50,36 @@ Notes:
 |---|---|---|---|
 | Joint name order | `shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper` | same (via `joint_name_map` default) | ✅ |
 | Joint key suffix | `.pos` | `.pos` (via `f"{joint}.pos"`) | ✅ |
+| Joint value units | **degrees** | **radians** (from /joint_states) | ⚠️ **MISMATCH** (gap #2) |
 | Camera resolution | 480×640 | wrist 480×640 (post-fix), top 480×640 | ✅ |
 | Camera key prefix | `observation.images.{wrist,top}` | plugin returns plain `{wrist,top}`; record pipeline adds the prefix | ✅ (pipeline-level) |
+| Image storage | HWC uint8 in mp4 | plugin returns HWC uint8 ndarray | ✅ |
+| Image __getitem__ return | (3, H, W) float32 (runtime transform) | n/a — training-time concern, not storage | — |
 | `observation.state` dtype | float32 | plugin returns Python `float` → record pipeline casts to float32 | ✅ |
 | `action` dtype | float32 | same | ✅ |
 | fps | 30 | plugin is sampling-rate-agnostic; record CLI sets fps | ✅ (CLI gate) |
-| `robot_type` | `so_follower` | **`so101_ros2`** via `SO101ROS2Robot.name` | ⚠️ **MISMATCH** |
+| `robot_type` | `so_follower` | **`so101_ros2`** via `SO101ROS2Robot.name` | ⚠️ **MISMATCH** (gap #1) |
 | `codebase_version` | `v3.0` | produced by lerobot-record on current main | ✅ (already v3) |
 
-## The one real parity gap — `robot_type`
+## Parity gap #2 — joint values in **degrees**, not radians
+
+Discovered from the 10 decoded samples. Value ranges confirm units:
+
+| Sample frame | shoulder_pan | shoulder_lift | elbow_flex | wrist_flex | wrist_roll | gripper |
+|---|---|---|---|---|---|---|
+| 16222 | -6.36 | -0.97 | -17.48 | 98.61 | -58.97 | 7.86 |
+| 97332 | 33.70 | -6.13 | -1.39 | 42.83 | -45.64 | 3.67 |
+| 113554 | 11.45 | -0.80 | 9.07 | 86.40 | -53.94 | 0.98 |
+| 129776 | 17.73 | -1.14 | -26.60 | 89.95 | -52.97 | 7.99 |
+| 145998 | 40.46 | 22.35 | -31.25 | 63.62 | -43.39 | 7.86 |
+
+These are **degrees**, not radians — 98.6 rad would be ~5600°, nonsensical. Upstream `SOFollowerConfig` has `use_degrees: bool = True` by default, so the real `so_follower` records degrees.
+
+Our Phase 3 plugin reads `/joint_states.position` verbatim, which is **radians** per ROS convention (confirmed in our live test: shoulder_pan +0.355 rad = ~20°).
+
+**Mitigation (symmetric with the `robot_type` fix):** add a `use_degrees: bool = True` field to `SO101ROS2RobotConfig` and `SO101ROS2TeleoperatorConfig`. When `True`, multiply all state/action values by `180/π` before returning them from `get_observation()` / `get_action()`. Defaults to True so parity recordings work out of the box; set False if someone wants radians for debugging.
+
+## The first real parity gap — `robot_type`
 
 Upstream convention: `info.json["robot_type"]` is populated from `robot.robot_type` (= `self.name` in `Robot.__init__`). Our plugin's `name = "so101_ros2"`, so a naive record run will write `robot_type = "so101_ros2"` into the dataset, breaking VER-01.
 
