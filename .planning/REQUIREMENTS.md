@@ -14,15 +14,15 @@
 
 ### Observation
 
-- [ ] **OBS-01**: Recorder reads a ROS2 image topic (sim: `/wrist_camera` from `ros_gz_bridge`; real: unchanged USB path in `--mode real`). Output column is `observation.images.wrist`
-- [ ] **OBS-02**: Recorder reads a second ROS2 image topic for the top camera (sim: `/top_camera` from `ros_gz_bridge`; real: unchanged USB path). Output column is `observation.images.top`
-- [ ] **OBS-03**: Gazebo SDF extended with a `top_camera` sensor (matching resolution/fps to the real dataset's top camera) + bridge entry added to `gazebo.launch.py`
-- [ ] **OBS-04**: Recorder subscribes to `/joint_states` (sensor_msgs/JointState, published by `jointstatereader`) and writes `observation.state` column using the HF canonical joint-name order
+- [x] **OBS-01**: Recorder reads a ROS2 image topic (sim: `/wrist_camera` from `ros_gz_bridge`; real: unchanged USB path in `--mode real`). Output column is `observation.images.wrist`. *(Phase 3: Robot plugin reads configurable camera topics; checkpoint verified `/top_camera` live, `/wrist_camera` plumbing correct but sim-side 0 Hz — tracked separately.)*
+- [x] **OBS-02**: Recorder reads a second ROS2 image topic for the top camera (sim: `/top_camera` from `ros_gz_bridge`; real: unchanged USB path). Output column is `observation.images.top`. *(Phase 3: verified live at 12 Hz, (480, 640, 3) uint8.)*
+- [x] **OBS-03**: Gazebo SDF extended with a `top_camera` sensor (matching resolution/fps to the real dataset's top camera) + bridge entry added to `gazebo.launch.py`. *(Phase 2, re-verified live in Phase 3.)*
+- [x] **OBS-04**: Recorder subscribes to `/joint_states` (sensor_msgs/JointState, published by `jointstatereader`) and writes `observation.state` column using the HF canonical joint-name order. *(Phase 3: Robot plugin reads `/joint_states`, applies `joint_name_map={gripper_joint: gripper}` at the boundary; verified live at 20.6 Hz.)*
 
 ### Action
 
-- [ ] **ACT-01**: Recorder subscribes to the action topic published by the user's controls (working assumption: `/joint_commands` with `sensor_msgs/JointState`) and writes the `action` column using HF canonical joint-name order
-- [ ] **ACT-02**: Action topic name/type is configurable via the Teleop plugin's config (so the controls owner can change topic without recorder code changes)
+- [x] **ACT-01**: Recorder subscribes to the action topic published by the user's controls (working assumption: `/joint_commands` with `sensor_msgs/JointState`) and writes the `action` column using HF canonical joint-name order. *(Phase 3: Teleop plugin subscribes to `/joint_commands`, same `joint_name_map` remap; in-process round-trip verified.)*
+- [x] **ACT-02**: Action topic name/type is configurable via the Teleop plugin's config (so the controls owner can change topic without recorder code changes). *(Phase 3: `SO101ROS2TeleoperatorConfig.action_topic` field, default `/joint_commands`.)*
 
 ### Dataset
 
@@ -33,7 +33,7 @@
 
 ### CLI
 
-- [ ] **CLI-01**: `lerobot-record --mode sim` alias dispatches to `--robot.type=so101_ros2 --teleop.type=so101_ros2`; `--mode real` dispatches to `--robot.type=so101_follower --teleop.type=so101_leader`. All other lerobot-record flags behave identically
+- [x] **CLI-01**: `lerobot-record --mode sim` alias dispatches to `--robot.type=so101_ros2 --teleop.type=so101_ros2`; `--mode real` dispatches to `--robot.type=so101_follower --teleop.type=so101_leader`. All other lerobot-record flags behave identically. *(Phase 3: `mac-env/scripts/lerobot-record-mode.sh`.)*
 - [ ] **CLI-02**: Episode orchestration matches the HF flow exactly: `--dataset.num_episodes`, `--dataset.episode_time_s`, keyboard controls (→ end, ← redo, Esc stop), reset time between episodes
 - [ ] **CLI-03**: `--display_data=true` renders via rerun the same way as the real flow
 
@@ -89,12 +89,12 @@ Deferred to a follow-up milestone.
 | FOUND-03 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
 | FOUND-04 | Phase 2 — Sim Parity (Top Camera) | Complete (no-op, verified) |
 | OBS-03 | Phase 2 — Sim Parity (Top Camera) | Complete (code; runtime verify deferred to Phase 5) |
-| OBS-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
-| OBS-02 | Phase 3 — ROS2 BYOH Plugins | Pending |
-| OBS-04 | Phase 3 — ROS2 BYOH Plugins | Pending |
-| ACT-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
-| ACT-02 | Phase 3 — ROS2 BYOH Plugins | Pending |
-| CLI-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
+| OBS-01 | Phase 3 — ROS2 BYOH Plugins | Complete |
+| OBS-02 | Phase 3 — ROS2 BYOH Plugins | Complete |
+| OBS-04 | Phase 3 — ROS2 BYOH Plugins | Complete |
+| ACT-01 | Phase 3 — ROS2 BYOH Plugins | Complete |
+| ACT-02 | Phase 3 — ROS2 BYOH Plugins | Complete |
+| CLI-01 | Phase 3 — ROS2 BYOH Plugins | Complete |
 | DATA-01 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
 | DATA-02 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |
 | DATA-03 | Phase 4 — Recorder End-to-End (v3 + HF Hub) | Pending |

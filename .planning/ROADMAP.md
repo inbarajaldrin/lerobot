@@ -8,7 +8,7 @@ Five phases that move from a stale PR #866 fork to a recorded pick-and-place sim
 
 - [x] **Phase 1: Rebase & Port ROS2 Camera** — Move fork to upstream main, bring PR #866's ROS2 camera forward as `src/lerobot/cameras/ros2/` subpackage ✅ 2026-04-23
 - [x] **Phase 2: Sim Parity (Top Camera)** — Add top camera SDF sensor + bridge ✅ 2026-04-23 (URDF joint rename turned out to already be canonical — no-op)
-- [ ] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics
+- [x] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics ✅ 2026-04-23 (live-Gazebo checkpoint PASS)
 - [ ] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub
 - [ ] **Phase 5: Pick-and-Place Capture + Schema Parity** — Record the target episode, assert parity against real HF dataset
 
@@ -63,10 +63,10 @@ Plans:
 **Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: Scaffold `lerobot_robot_so101_ros2` plugin package (naming, config, register_subclass, skeleton connect/disconnect)
-- [ ] 03-02: Implement `Robot` methods — ROS2 subs for joint_states + 2 image topics, `observation_features`/`action_features`, `get_observation`, `send_action` stub
-- [ ] 03-03: Scaffold `lerobot_teleoperator_so101_ros2` plugin — subscribe to configurable action topic, `get_action` returns latest canonical-named dict
-- [ ] 03-04: Author `--mode sim|real` CLI shim (either a thin wrapper script or a lerobot-native alias) + update setup guide with the sim invocation
+- [x] 03-01: Scaffold `src/lerobot/robots/so101_ros2/` fork-internal plugin (deviation from PLAN: chose fork-internal over external package)
+- [x] 03-02: Implement `Robot` — shared rclpy singleton with ROS2Camera, `/joint_states` sub, `get_observation`, `send_action` no-op. Live-Gazebo checkpoint PASS.
+- [x] 03-03: Scaffold + implement `src/lerobot/teleoperators/so101_ros2/` — subscribe to `/joint_commands`, configurable topic/name-map
+- [x] 03-04: `mac-env/scripts/lerobot-record-mode.sh` + runbook update
 
 ### Phase 4: Recorder End-to-End (v3 + HF Hub)
 
@@ -112,7 +112,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertion
 |-------|----------------|--------|-----------|
 | 1. Rebase & Port ROS2 Camera | 3/3 | Complete | 2026-04-23 |
 | 2. Sim Parity (Top Camera) | 1/1 | Complete | 2026-04-23 |
-| 3. ROS2 BYOH Plugins | 0/4 | Not started | - |
+| 3. ROS2 BYOH Plugins | 4/4 | Complete | 2026-04-23 |
 | 4. Recorder End-to-End (v3 + HF Hub) | 0/3 | Not started | - |
 | 5. Pick-and-Place + Schema Parity | 0/3 | Not started | - |
 

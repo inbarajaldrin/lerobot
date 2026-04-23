@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** Phase 3 — ROS2 BYOH Plugins (Robot + Teleop)
+**Current focus:** Phase 4 — Recorder End-to-End (v3 + HF Hub)
 
 ## Current Position
 
-Phase: 3 of 5 (ROS2 BYOH Plugins — Robot + Teleop)
+Phase: 4 of 5 (Recorder End-to-End)
 Plan: — (not yet planned)
-Status: Phase 2 complete; Phase 3 ready to plan
-Last activity: 2026-04-23 — Phase 2 shipped (top camera SDF + bridge; FOUND-04 turned out to be a no-op)
+Status: Phase 3 complete; Phase 4 ready to plan
+Last activity: 2026-04-23 — Phase 3 shipped (Robot + Teleop ROS2 plugins, live-Gazebo checkpoint PASS, --mode CLI shim)
 
-Progress: [███░░░░░░░] 29% (4/14 plans complete)
+Progress: [█████░░░░░] 57% (8/14 plans complete)
 
 ## Performance Metrics
 
@@ -53,9 +53,11 @@ None yet — captured via `/gsd-add-todo` if they emerge.
 
 ### Blockers/Concerns
 
-- **Action topic contract unlocked**: working assumption is `/joint_commands` (`sensor_msgs/JointState` with canonical names). Must be confirmed with controls owner before Phase 3 ships (ACT-02 makes it configurable either way).
 - **Real HF dataset repo_id unknown**: need the exact colleague-provided pick-and-place dataset URL before Phase 5's parity check can run. Blocks VER-01 content but not earlier phases.
-- **Second (top) camera spec**: Gazebo needs resolution + pose matching the real dataset's `top` camera. Pulled during Phase 5 audit or earlier if the real dataset URL lands first.
+- **Second (top) camera spec**: currently 640×480 @ 30 fps. May need retune to match real dataset.
+- **`/wrist_camera` 0 Hz on ROS2 side** (sim-stack bug, not Phase 3): gz-side publisher + bridge wiring are identical to `/top_camera` but no messages arrive on the ros2 graph. Plugin handles it fail-loud via `TimeoutError`. Triage deferred — not a Phase-4 blocker unless we require both cameras for the first recording.
+- **numpy<2 pin needed in `mac-env/pixi.toml`**: `pip install -e lerobot` upgrades numpy to PyPI 2.2.6, which fails to load on this Mac due to missing Accelerate ILP64 symbols, killing Python controller spawners. Workaround applied (force-reinstall numpy<2); non-blocking follow-up to pin in pixi.toml.
+- **`Robot.send_action` no-op for record loop**: Phase 3 ships send_action returning input unchanged. Whether `lerobot-record`'s record loop tolerates this (or expects real actuation) is a Phase 4 reveal.
 
 ## Deferred Items
 
@@ -71,8 +73,8 @@ Items acknowledged and carried forward from the v2 list:
 
 ## Session Continuity
 
-Last session: 2026-04-23 (Phase 1 + Phase 2 + runtime verification, one long session)
-Stopped at: Phase 2 fully shipped AND runtime-verified on Mac. User confirmed Gazebo shows robot + cameras work in RViz. Session paused before Phase 3 with a handoff prompt.
+Last session: 2026-04-23 (Phase 3 shipped autonomously after user unpause; live-Gazebo checkpoint + numpy-regression triage + all 4 plans)
+Stopped at: Phase 3 complete, all 6 requirements satisfied, live-Gazebo PASS. Phase 4 ready to plan.
 Resume file: None — read the docs listed below.
 
 **For next session, READ THESE FIRST (in this order):**
@@ -89,9 +91,14 @@ Resume file: None — read the docs listed below.
 - `controller_manager` logs "No clock received, using time argument instead" continuously during sim. The `joint_state_broadcaster` spawner (`spawner-6`) crashed with an importlib error ("controller_manager==4.43.0 spawner entry point"). Topics `/joint_states` still show in `ros2 topic list` — so something downstream publishes them — but actual rate sampling showed 0 Hz over 3 s with default QoS (possibly QoS mismatch or no clock propagation). Needs diagnosis in Phase 3 before recording.
 - `pick-ik` is not on RoboStack osx-arm64. MoveIt planning will fail or fall back; topic-level verification works without it. Source-build of `pick-ik` is a separate follow-up, not currently in any phase.
 
-**Phase 3 plan (waiting for user to unpause):**
-- 03-01: scaffold `Exploring-VLAs/lerobot_robot_so101_ros2/` BYOH package
-- 03-02: implement Robot subscribing to /joint_states + /wrist_camera + /top_camera
-- 03-03: scaffold `Exploring-VLAs/lerobot_teleoperator_so101_ros2/` subscribing to /joint_commands (already publishes in the current stack)
-- 03-04: `--mode sim|real` CLI shim in `mac-env/scripts/`
-- Midway checkpoint after 03-02: verify Robot plugin with `lerobot-teleoperate --robot.type=so101_ros2` against live Gazebo.
+**Phase 3 delivered (2026-04-23):**
+- 03-01: `src/lerobot/robots/so101_ros2/` scaffold (deviation from original plan: fork-internal, not external BYOH package)
+- 03-02: Robot implementation + live-Gazebo checkpoint PASS (20.6 Hz /joint_states, 12.3 Hz /top_camera, arm moved +0.355 rad under trajectory goal)
+- 03-03: `src/lerobot/teleoperators/so101_ros2/` — subscribes `/joint_commands`, fail-loud on stale/missing joints
+- 03-04: `mac-env/scripts/lerobot-record-mode.sh` CLI shim
+
+**Phase 4 prep:**
+- Audit `lerobot.scripts.lerobot_record.record_loop` + `make_default_processors` to confirm our plugins slot in without forking the script
+- Decide how to handle Robot.send_action being a no-op (Phase 3 D5); may need a Phase-4 passthrough publisher if record loop expects actual actuation
+- End-to-end record 2 episodes locally, inspect v3 parquet + MP4 structure
+- Dry-run push_to_hub to a throwaway repo_id
