@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-04-23)
 
 ## Current Position
 
-Phase: 6 of 6 (Real-Hardware ROS2 Unification) — planned, not started
-Plan: `.planning/phases/06-real-hardware-unification/PLAN.md` written
-Status: Phases 1–5 shipped on Mac sim side. User expanded scope to include real-hw unification on Mac (was V2-REAL-UNIFIED). Phase 6 has 4 plans, 4 new requirements (REAL-01..04), ~40 lines of Python plus launch files + docs. Ready to execute when user says go OR when real SO-ARM101 hardware is ready to test against.
-Last activity: 2026-04-23 — scope expanded; Phase 6 PLAN.md landed; ROADMAP/REQUIREMENTS updated; v1 requirements 21 → 25.
+Phase: 6 of 6 (Real-Hardware ROS2 Unification) — **code+docs complete; 6-07 hardware-gated**
+Plan: `.planning/phases/06-real-hardware-unification/PLAN.md` (7 sub-plans)
+Status: Phases 1–5 shipped on Mac sim side. Phase 6: **6-01..06 shipped 2026-04-23**; **6-07 deferred** pending USB-connected SO-ARM101 leader+follower pair (no hardware on dev machine). All REAL-0x requirements except REAL-04 (end-to-end real record) are covered.
+Last activity: 2026-04-23 — 6-01 jointstatereader re-verified (code was in commit 0944414); 6-02 `so_arm101_bringup` shipped + live hybrid record test; 6-03 `record_sim.sh → record.sh` rename + symlink + new `record_one_shot.sh` wrapper + runbook section for real hardware; 6-04 `sim_ground_truth` shipped with `gz.transport13` direct (ros_gz_bridge drops `pose.name` — bridge unusable for per-object filtering, workaround documented); 6-05 `localizer_bridge` in `inbarajaldrin/aruco_camera_localizer@robosort` got 6 ROS params + `/objects_bbox` publisher + `config/bbox_catalog.json` (committed locally, not pushed — user decides); 6-06 new project-agnostic `ROS2_MAC_SETUP.md` with `LEROBOT_ROS2_MAC_SETUP.md` linking to it.
 
-Progress: [███████░░░] 72% (14/18 planned plans + 1 V2 follow-up)
+Progress: [███████████████████░░] ~95% (20/21 plans — sim 14/14 + phase 6 6/7; 6-07 hw-gated)
 
 ## Performance Metrics
 

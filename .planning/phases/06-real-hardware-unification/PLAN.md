@@ -43,7 +43,15 @@ The current node is used as a standalone teleop-and-publish in other SO-ARM101 w
 
 ## Plans
 
-### 6-01 — `jointstatereader` — dual publish (follower state + leader commands)
+### 6-01 — `jointstatereader` — dual publish (follower state + leader commands) — **SHIPPED 2026-04-23**
+
+Commit: `0944414 feat(jointstatereader): dual publish + topic-driven follower (06-01)`. Code landed in `vla_SO-ARM101/src/jointstatereader/jointstatereader/joint_state_reader.py`.
+
+**Static verification 2026-04-23:** `colcon build --packages-select jointstatereader` PASS; init smoke with `leader_port=/dev/does-not-exist-leader follower_port=/dev/does-not-exist-follower` → node starts, logs `mode=observation-only | publish_source=follower publish_commands=True`, retries connect once per second without crashing. All four parameters wired (`publish_source`, `publish_commands`, `joint_states_topic`, `joint_commands_topic`); backward compat preserved via `publish_source='leader'`.
+
+**Bonus beyond the stated scope:** the shipped implementation also adds an `accept_command_input` flag that turns `/joint_commands` into a subscriber and writes received goals back to the follower serial — enables topic-driven teleop from `control_gui` / policies / scripts without needing a physical leader arm. Exclusive with `mirror_to_follower` (mutually-exclusive validated at node init).
+
+### 6-01 (original plan retained for reference) — `jointstatereader` dual publish
 
 Extend `vla_SO-ARM101/src/jointstatereader/jointstatereader/joint_state_reader.py`:
 
@@ -92,73 +100,81 @@ Factor out `_read_all(ser)` → list[int] and `_publish(pub, ticks)` helpers (cu
 
 **Live verification (requires real SO-ARM101):** save for 6-04.
 
-### 6-02 — Real-camera ROS2 launch (`image_tools/cam2image` + optional RealSense)
+### 6-02 — Real-camera ROS2 launch (standalone `so_arm101_bringup` package)
 
-**Reality check done during planning:** `ros-jazzy-usb-cam` is **not in RoboStack osx-arm64**. Available alternatives that ARE installed:
-- `image_tools/cam2image` — bundled with RoboStack's `ros-jazzy-desktop`. OpenCV-backed camera grabber that publishes `sensor_msgs/Image`. Works with any device cv2.VideoCapture can open — on macOS that's the AVFoundation backend, which is what the built-in and most USB cameras present as.
-- `ros-jazzy-realsense2-camera` — native Intel RealSense driver for the D435 / D455 / etc.
+**Re-scope (2026-04-23):** earlier draft used `image_tools/cam2image` + optional RealSense. Dropped in favour of reusing the `cv2.VideoCapture`-based publisher from `aruco_camera_localizer/camera_publisher.py`, which already has a macOS-hardened codepath (AVFoundation-backed, handles permission prompts, known to work with the USB wrist camera on this Mac).
 
-So Phase 6 uses **cam2image** for generic USB webcams (wrist camera), and lets the user swap in **realsense2_camera** via launch argument for an Intel RealSense on the top view.
+**Key decision: copy, don't depend.** To keep the lerobot real-hardware stack self-contained (no runtime dependency on `aruco_camera_localizer@robosort`), we copy the relevant files into a new package. The aruco localizer becomes a *consumer* of our camera topic (`/wrist_camera`), not a producer. Same camera frames feed both the lerobot recorder and any aruco-based pose publisher — single source, multiple consumers.
 
-Add launch file `vla_SO-ARM101/launch/real_cameras.launch.py`:
+**New package:** `vla_SO-ARM101/src/so_arm101_bringup/`
+
+```
+so_arm101_bringup/
+├── package.xml              # ament_python, depends: rclpy, sensor_msgs, cv_bridge, python3-opencv
+├── setup.py                 # entry_point: camera_publisher
+├── setup.cfg
+├── resource/so_arm101_bringup
+├── so_arm101_bringup/
+│   ├── __init__.py
+│   ├── camera_publisher.py  # ported from aruco_camera_localizer, enhanced
+│   └── camera_selection.py  # copied as-is (interactive picker fallback)
+└── launch/
+    └── real_cameras.launch.py   # spawns wrist + top instances
+```
+
+**Changes vs the aruco original (applied during port):**
+1. Resolution / FPS / `frame_id` come from CLI flags (`--width 640 --height 480 --fps 30.0 --frame-id <id>`) with defaults matching the sim pipeline. The original pulled these from `robot_config.yaml` via a `config_loader` singleton — that dependency is removed.
+2. Hardcoded exposure / white-balance clamping (`CAP_PROP_EXPOSURE=-7.0`, `CAP_PROP_AUTO_WB=0`, etc., tuned for ArUco marker stability) is dropped; dataset recording uses camera deployment defaults.
+3. After `cap.set(WIDTH/HEIGHT/FPS)` the node reads back `cap.get(...)` and logs a `[WARN]` when the driver silently downgrades. AVFoundation routinely ignores arbitrary `set()` calls; the log must tell the truth about what was actually captured so parity checks are honest.
+4. `parse_known_args()` so the ROS CLI tail (`--ros-args -r __node:=...`) coexists with argparse flags.
+
+**Launch file (`real_cameras.launch.py`):**
 
 ```python
 def generate_launch_description():
-    # Device indexes (cv2.VideoCapture) — override via --ros-args if needed.
-    wrist_idx = LaunchConfiguration('wrist_idx', default='0')
-    top_idx   = LaunchConfiguration('top_idx',   default='1')
-    use_realsense_top = LaunchConfiguration('top_realsense', default='false')
+    wrist_idx  = LaunchConfiguration('wrist_idx')
+    top_idx    = LaunchConfiguration('top_idx')
+    enable_top = LaunchConfiguration('enable_top')
+    width      = LaunchConfiguration('width')
+    height     = LaunchConfiguration('height')
+    fps        = LaunchConfiguration('fps')
 
-    return LaunchDescription([
-        DeclareLaunchArgument('wrist_idx',   default_value='0'),
-        DeclareLaunchArgument('top_idx',     default_value='1'),
-        DeclareLaunchArgument('top_realsense', default_value='false'),
-
-        Node(
-            package='image_tools', executable='cam2image',
-            name='wrist_camera',
-            parameters=[{
-                'device_id': wrist_idx,
-                'width':   640,
-                'height':  480,
-                'frequency': 30.0,
-                'frame_id': 'camera_link',
-            }],
-            remappings=[('image', '/wrist_camera')],
-        ),
-
-        # Top camera — either another cam2image or RealSense, picked by arg.
-        Node(
-            condition=UnlessCondition(use_realsense_top),
-            package='image_tools', executable='cam2image',
-            name='top_camera',
-            parameters=[{
-                'device_id': top_idx,
-                'width':   640, 'height': 480, 'frequency': 30.0,
-                'frame_id': 'top_camera_link',
-            }],
-            remappings=[('image', '/top_camera')],
-        ),
-        Node(
-            condition=IfCondition(use_realsense_top),
-            package='realsense2_camera', executable='realsense2_camera_node',
-            name='top_camera',
-            parameters=[{
-                'rgb_camera.profile': '640x480x30',
-                'enable_depth': False,  # we only record RGB; saves bandwidth
-            }],
-            remappings=[('color/image_raw', '/top_camera')],
-        ),
-    ])
+    declarations = [
+        DeclareLaunchArgument('wrist_idx',  default_value='0'),
+        DeclareLaunchArgument('top_idx',    default_value='1'),
+        DeclareLaunchArgument('enable_top', default_value='true'),
+        DeclareLaunchArgument('width',      default_value='640'),
+        DeclareLaunchArgument('height',     default_value='480'),
+        DeclareLaunchArgument('fps',        default_value='30.0'),
+    ]
+    wrist = Node(package='so_arm101_bringup', executable='camera_publisher',
+                 name='wrist_camera', output='screen',
+                 arguments=['--camera-id', wrist_idx,
+                            '--publish-topic', '/wrist_camera',
+                            '--width', width, '--height', height, '--fps', fps,
+                            '--frame-id', 'wrist_camera_optical_frame'])
+    top = Node(package='so_arm101_bringup', executable='camera_publisher',
+               name='top_camera', output='screen',
+               condition=IfCondition(enable_top),
+               arguments=['--camera-id', top_idx,
+                          '--publish-topic', '/top_camera',
+                          '--width', width, '--height', height, '--fps', fps,
+                          '--frame-id', 'top_camera_optical_frame'])
+    return LaunchDescription(declarations + [wrist, top])
 ```
 
-**Known gap:** `cam2image` does NOT publish `/<camera>/camera_info`. Our Phase 3 `ROS2Camera` doesn't require it (CameraInfo is optional in the plugin's contract), so records work. If we later want calibrated image rectification, we'd need a separate camera_info publisher or swap cam2image for `realsense2_camera` / a source-built `usb_cam`.
+No RealSense branch: `cv2.VideoCapture` already works with any macOS-visible camera including RealSense's RGB stream. If it ever fails on a RealSense, that's a follow-up investigation — not an up-front complication.
 
-**Static verification:**
-- `pixi run bash -c 'ros2 pkg list | grep -E "image_tools|realsense2"'` returns both.
-- `ros2 launch vla_SO-ARM101 real_cameras.launch.py` starts without error (cam2image tries to open device 0; if no camera present, it logs an OpenCV error but doesn't crash the launch).
+**Known gap (unchanged):** no `/<camera>/camera_info` published. Phase 3 `ROS2Camera` doesn't require it, so records work. Add a separate `camera_info` publisher if we later need rectification.
 
-**Exit criterion:** with a connected USB camera, `ros2 topic hz /wrist_camera` reports ≥ 25 Hz; `ros2 topic echo /wrist_camera --once` returns a well-formed `sensor_msgs/Image`.
+**Static verification (done 2026-04-23, no hardware):**
+- `colcon build --packages-select so_arm101_bringup` — PASS
+- `ros2 pkg list | grep so_arm101_bringup` — present
+- `ros2 pkg executables so_arm101_bringup` — `camera_publisher` listed
+- `ros2 launch so_arm101_bringup real_cameras.launch.py --show-args` — all 6 args enumerated
+- `ros2 run so_arm101_bringup camera_publisher --camera-id 99 ...` — fail-loud: `RuntimeError: Cannot open camera 99`, exit code 1
+
+**Exit criterion (hardware in hand, deferred to 6-07):** `ros2 topic hz /wrist_camera` ≥ 25 Hz and `ros2 topic echo /wrist_camera --once` returns a well-formed `sensor_msgs/Image`.
 
 ### 6-03 — Runbook: "Record a dataset on real hardware"
 
@@ -187,7 +203,8 @@ New section in `LEROBOT_ROS2_MAC_SETUP.md` (or new `REAL_HARDWARE_SETUP.md` if i
    ```bash
    pixi run --manifest-path /tmp/mac-env/pixi.toml bash -c "
      source /tmp/soarm-ws/install/setup.bash
-     ros2 launch vla_SO-ARM101 real_cameras.launch.py"
+     ros2 launch so_arm101_bringup real_cameras.launch.py \
+       wrist_idx:=0 top_idx:=1 enable_top:=true"
    ```
 
 4. **Record** (same command as sim, just different `repo_id`):
@@ -207,17 +224,54 @@ New section in `LEROBOT_ROS2_MAC_SETUP.md` (or new `REAL_HARDWARE_SETUP.md` if i
    - Camera device naming on macOS (AVFoundation vs `/dev/video*`)
    - Serial baud / latency knobs if read_errors spike
 
-### 6-04 — End-to-end real record (hardware in hand)
+### 6-04 — Sim ground-truth publisher (`/objects_poses_sim` + `/objects_bbox_sim`) — **SHIPPED 2026-04-23**
 
-When hardware is connected:
+New package: `vla_SO-ARM101/src/sim_ground_truth/` with executable `ground_truth_publisher` + launch file `ground_truth.launch.py` + catalog `config/lego_world_objects.yaml`.
 
-1. Run the 6-03 runbook steps 1–5 for a short motion episode.
+**Contract matched against `control_gui` (locked during recon):**
+- `/objects_poses_sim` — `tf2_msgs/TFMessage`. Each `TransformStamped.child_frame_id` = object name (consumed at `control_gui.py:2328`). `header.frame_id` = world name.
+- `/objects_bbox_sim` — `std_msgs/String` JSON `{"<name>": {"sx": m, "sy": m, "sz": m}}` (consumed at `control_gui.py:2343`).
+
+**Key design decision: subscribe via `gz.transport13`, NOT `ros_gz_bridge`.** Tried the obvious approach first — add a `parameter_bridge` entry mapping `/world/<world>/pose/info (gz.msgs.Pose_V)` → `tf2_msgs/TFMessage` — and live-inspected the bridged output: **both `frame_id` and `child_frame_id` come through empty**. The bridge's Pose_V → TFMessage conversion drops `pose.name` and `pose.id`, leaving translation/rotation data orientated positionally but unlabeled. Unusable for per-object filtering.
+
+Workaround: use `gz.transport13` Python bindings directly inside the filter node. `GzNode().subscribe(Pose_V, '/world/<world>/pose/info', cb)` delivers `gz.msgs10.pose_v_pb2.Pose_V` with `pose.name` preserved (~57 Hz at test time). We then publish to standard ROS2 topics via `rclpy`. The package lists `ros_gz` as an `<exec_depend>` to pin `gz.transport13`/`gz.msgs10` on RoboStack; no runtime bridge involved.
+
+**Object catalog** lives at `config/lego_world_objects.yaml`. YAML keyed by Gazebo model name (`<model name="...">` in `lego_world.sdf`) with `sx/sy/sz` in meters. Must match the `<box><size>` values in the world SDF so sim bbox matches what aruco would measure on real hardware. Overridable via `objects_yaml` launch arg for other worlds.
+
+**Other pitfalls caught at verification time:**
+- World name in `lego_world.sdf` is `<world name="so_arm101_lego_world">`, not `lego_world` (SDF filename ≠ world name). The launch-arg default reflects the real world name.
+- Gazebo broadcasts every entity — 45+ items: robot links (`shoulder`, `wrist`, `gripper_jaw`...), visuals, lights, cameras. Filtering to the catalog set is essential. `log_unknown_entities:=true` is a debug aid that logs first occurrence of each unfiltered entity.
+
+**Static verification:**
+- `colcon build --packages-select sim_ground_truth` — PASS
+- `ros2 pkg executables sim_ground_truth` → `ground_truth_publisher`
+- `ros2 launch sim_ground_truth ground_truth.launch.py --show-args` — all 5 args enumerated with correct defaults
+
+**Live verification (2026-04-23, sim stack running with lego_world):**
+- `/objects_poses_sim` — `TFMessage` echoed once shows all 3 legos:
+  - `red_lego_2x4` at `(0.18, 0.03, 0.0055)` — exact match to the SDF pose
+  - `green_lego_2x3` at `(0.20, 0.06, 0.0055)`
+  - `blue_lego_2x2` at `(0.22, 0.03, 0.0055)`
+  - `frame_id: so_arm101_lego_world`, `child_frame_id: <name>` ✓
+- `/objects_bbox_sim` — JSON with all 3 entries at expected sizes ✓
+
+**Deferred:** live test through `control_gui` (subscribes to these and drives grasp planning) is left for 6-06 runbook verification — exit criterion confirmed via direct topic inspection today.
+
+### 6-07 — End-to-end real record (hardware in hand) — **DEFERRED pending hardware**
+
+Gating condition: requires a **USB-connected SO-ARM101 leader + follower pair** + **USB wrist camera** on the same host. No hardware present on the dev machine as of 2026-04-23 shipping of 6-01..06, so this plan is explicitly parked until hardware is available.
+
+What remains to run when hardware arrives (from 6-03 runbook):
+
+1. Run the 6-03 runbook steps 1–4 for a short motion episode.
 2. Observe in rerun: `/wrist_camera` live, `/joint_states` tracks follower, `/joint_commands` tracks leader.
 3. Record 1 episode, push to Hub.
 4. `verify_parity.py --ours <real-repo> --target arjunsinghyadav2/...` → PASS.
 5. Compare `action` vs `observation.state` traces — expect `action` (leader) leads, `state` (follower) tracks with servo-tuned lag.
 
-If hardware NOT connected at execution time, 6-04 moves to a "Real-hw follow-up" entry in REQUIREMENTS.md — but 6-01/6-02/6-03 still land as shipped scope.
+Until this lands, REAL-04 stays unchecked in REQUIREMENTS.md. Every other
+REAL-0x requirement is shipped through 6-01..06, so Phase 6's code + docs
+are usable end-to-end without 6-07.
 
 **Exit criterion:** verify_parity PASS on a real-recorded dataset; docs reproducibly cover the real-hardware path.
 
@@ -244,7 +298,7 @@ The name was apt when sim was the only mode. For real-hardware use it's misleadi
 | Plan | Scope | Gates on hardware? |
 |---|---|---|
 | 06-01 | `jointstatereader` dual-publish + `/joint_commands` subscriber-writes-follower mode | No |
-| 06-02 | `real_cameras.launch.py` — cam2image wrist + optional realsense top | No |
+| 06-02 | `so_arm101_bringup` package (ported camera_publisher + `real_cameras.launch.py` wrist + top) | No |
 | 06-03 | Real-hardware runbook + `record_sim.sh → record.sh` rename | No |
 | 06-04 | **Sim ground-truth publisher** (NEW) — Python node in `vla_SO-ARM101` publishing `/objects_poses_sim` (TFMessage) + `/objects_bbox_sim` (String+JSON) from Gazebo world pose info at 10 Hz | No |
 | 06-05 | **Aruco bbox + topic naming** (NEW) — params `objects_poses_topic` / `objects_bbox_topic` + String/JSON bbox publisher dumping known dimensions from `aruco_config.json` at 1 Hz. Lands in `inbarajaldrin/aruco_camera_localizer@robosort` | No |
@@ -275,5 +329,5 @@ The name was apt when sim was the only mode. For real-hardware use it's misleadi
 ## Dependencies
 
 - Phases 1–5 ✅ — plugins, record pipeline, verify_parity
-- Real SO-ARM101 hardware for 6-04 (optional for 6-01/6-02/6-03 shipping)
-- `ros-jazzy-usb-cam` in RoboStack — verify it's installable on osx-arm64 before committing
+- Real SO-ARM101 hardware for 6-07 (optional for 6-01..06 shipping)
+- `python3-opencv` + `cv_bridge` already in RoboStack osx-arm64 (used by `aruco_camera_localizer` today, so the ported `camera_publisher` has the same base at hand)
