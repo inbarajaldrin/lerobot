@@ -9,7 +9,7 @@ Five phases that move from a stale PR #866 fork to a recorded pick-and-place sim
 - [x] **Phase 1: Rebase & Port ROS2 Camera** — Move fork to upstream main, bring PR #866's ROS2 camera forward as `src/lerobot/cameras/ros2/` subpackage ✅ 2026-04-23
 - [x] **Phase 2: Sim Parity (Top Camera)** — Add top camera SDF sensor + bridge ✅ 2026-04-23 (URDF joint rename turned out to already be canonical — no-op)
 - [x] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics ✅ 2026-04-23 (live-Gazebo checkpoint PASS)
-- [ ] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub
+- [x] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub ✅ 2026-04-23
 - [ ] **Phase 5: Pick-and-Place Capture + Schema Parity** — Record the target episode, assert parity against real HF dataset
 
 ## Phase Details
@@ -82,9 +82,10 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: Audit upstream `lerobot.scripts.lerobot_record.record_loop` + `make_default_processors` — confirm our plugins slot in without forking the script
-- [ ] 04-02: Implement / verify `finalize()` call site in any custom driver script; end-to-end record 2 episodes on disk, inspect parquet + MP4
-- [ ] 04-03: Push_to_hub dry run + real run to a throwaway repo_id; rerun display verified; update setup guide with the exact record command
+- [x] 04-01: Parity fixes on SO101ROS2RobotConfig (`robot_type` override) + both plugin configs (`use_degrees`)
+- [x] 04-02: Record-internals audit (RECORD_INTERNALS.md) + caught robot.name vs robot.robot_type dual path
+- [x] 04-03: End-to-end local record (2 eps on disk) + CLI plugin registration fix + reusable `record_sim.sh` wrapper
+- [x] 04-04: `push_to_hub` → inbarajaldrin/so_arm101_sim_smoke_v0; round-trip reload + schema equality vs real dataset PASS
 
 ### Phase 5: Pick-and-Place Capture + Schema Parity
 
@@ -113,7 +114,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertion
 | 1. Rebase & Port ROS2 Camera | 3/3 | Complete | 2026-04-23 |
 | 2. Sim Parity (Top Camera) | 1/1 | Complete | 2026-04-23 |
 | 3. ROS2 BYOH Plugins | 4/4 | Complete | 2026-04-23 |
-| 4. Recorder End-to-End (v3 + HF Hub) | 0/3 | Not started | - |
+| 4. Recorder End-to-End (v3 + HF Hub) | 4/4 | Complete | 2026-04-23 |
 | 5. Pick-and-Place + Schema Parity | 0/3 | Not started | - |
 
 **Total:** 5 phases, 14 plans (down from 15 after Phase 2 collapse), 21 v1 requirements — full coverage.

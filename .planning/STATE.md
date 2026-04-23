@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** Phase 4 — Recorder End-to-End (v3 + HF Hub)
+**Current focus:** Phase 5 — Pick-and-Place Capture + Schema Parity
 
 ## Current Position
 
-Phase: 4 of 5 (Recorder End-to-End)
+Phase: 5 of 5 (Pick-and-Place + Schema Parity)
 Plan: — (not yet planned)
-Status: Phase 3 complete; Phase 4 ready to plan
-Last activity: 2026-04-23 — Phase 3 shipped (Robot + Teleop ROS2 plugins, live-Gazebo checkpoint PASS, --mode CLI shim)
+Status: Phase 4 complete; Phase 5 ready to plan
+Last activity: 2026-04-23 — Phase 4 shipped (v3 dataset on disk + HF Hub, schema equality vs real target PASS, rerun integration live)
 
-Progress: [█████░░░░░] 57% (8/14 plans complete)
+Progress: [████████░░] 86% (12/14 plans complete)
 
 ## Performance Metrics
 
@@ -98,8 +98,15 @@ Resume file: None — read the docs listed below.
 - 03-03: `src/lerobot/teleoperators/so101_ros2/` — subscribes `/joint_commands`, fail-loud on stale/missing joints
 - 03-04: `mac-env/scripts/lerobot-record-mode.sh` CLI shim
 
-**Phase 4 prep:**
-- Audit `lerobot.scripts.lerobot_record.record_loop` + `make_default_processors` to confirm our plugins slot in without forking the script
-- Decide how to handle Robot.send_action being a no-op (Phase 3 D5); may need a Phase-4 passthrough publisher if record loop expects actual actuation
-- End-to-end record 2 episodes locally, inspect v3 parquet + MP4 structure
-- Dry-run push_to_hub to a throwaway repo_id
+**Phase 4 delivered (2026-04-23):**
+- 04-01: robot_type + use_degrees parity fixes on both plugin configs
+- 04-02: RECORD_INTERNALS.md audit; caught robot.name vs robot.robot_type dual-path and fixed
+- 04-03: End-to-end local record (2 eps, 105 frames, schema-equivalent on disk); added `lerobot_record.py` / `lerobot_teleoperate.py` plugin imports, reusable `record_sim.sh` + `drive_joint_commands.py`
+- 04-04: push_to_hub to `inbarajaldrin/so_arm101_sim_smoke_v0`; round-trip reload + schema equality vs the real target dataset PASS
+- rerun-sdk installed; `--display_data=true` spawns live viewer during record; `lerobot-dataset-viz` for post-hoc
+- gitignore hardened for tokens/.env; tokens live at `~/.cache/huggingface/token`
+
+**Phase 5 prep:**
+- Author `verify_parity.py` (VER-01) comparing our dataset's `meta.features` + `info.json` against `arjunsinghyadav2/blue_sort_black_bg_colored_cups_v1_440ep`. Core asserts already prototyped inline during 04-04 — promote to a reusable CI-style script.
+- User drives control_gui to capture a real pick-and-place episode (VER-02). `record_sim.sh --dataset.push_to_hub=true` handles it end-to-end once the task is framed.
+- Full-stack reproducible runbook (VER-03) — update LEROBOT_ROS2_MAC_SETUP.md with the exact commands.
