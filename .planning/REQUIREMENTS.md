@@ -47,6 +47,13 @@
 - [ ] ~~**VER-02**: Full pick-and-place sim episode~~ — **deferred to Linux + IsaacSim follow-up.** Gazebo Harmonic on macOS Apple Silicon doesn't have the contact physics tuning needed for reliable grasp sequences; the stack produces valid proprioception + camera data but not reliable pick-and-place trajectories. On Mac we ship two motion-test datasets that prove the recording pipeline end-to-end (`so_arm101_sim_smoke_v0`, `so_arm101_sim_base_yaw_v0`) — both schema-parity-verified. A real pick-and-place trajectory dataset is v2 work.
 - [x] **VER-03**: Full-stack reproducible runbook. *(Phase 5: "Record a dataset from scratch" section added to `LEROBOT_ROS2_MAC_SETUP.md` — ordered commands from bootstrap through push_to_hub + verify_parity + lerobot-dataset-viz, plus a troubleshooting quick table.)*
 
+### Real-Hardware Unification (newly promoted from V2 into v1)
+
+- [ ] **REAL-01**: Extend `jointstatereader` for dual publishing. Default `publish_source='follower'` emits real follower-arm positions on `/joint_states` (matches sim semantics); a new `/joint_commands` publisher always emits real leader-arm positions (matches upstream `so_leader` teleop contract). Backward-compat preserved via the `publish_source='leader'` fallback.
+- [ ] **REAL-02**: ROS2 launch for real cameras. `vla_SO-ARM101/launch/real_cameras.launch.py` uses `image_tools/cam2image` for a generic USB wrist camera (`ros-jazzy-usb-cam` is not in RoboStack osx-arm64) with an optional `realsense2_camera` top-camera variant behind a launch arg.
+- [ ] **REAL-03**: Runbook — "Record a dataset on real hardware" section in `LEROBOT_ROS2_MAC_SETUP.md`. Steps: USB perms / port discovery → `jointstatereader` + real_cameras launch → `record_sim.sh` (or the renamed `record.sh`) → `verify_parity.py`.
+- [ ] **REAL-04**: End-to-end real-hardware recording — verify_parity PASS on a dataset captured with live USB + real cameras. Requires connected SO-ARM101 hardware; if unavailable at Phase 6 execution, 06-04 becomes a hardware-required follow-up but 06-01..03 still land.
+
 ## v2 Requirements
 
 Deferred to a follow-up milestone.
@@ -59,8 +66,8 @@ Deferred to a follow-up milestone.
 
 ### Real-side ROS2 (optional convergence)
 
-- **V2-REAL-01**: Publish real SO-101 camera feeds as ROS2 topics (usb_cam + realsense2_camera) so real-side can also use `--mode sim` plugins — fully unified code path. Keeps colleague's Windows flow as-is unless they opt in.
-- **V2-REAL-UNIFIED**: Extend the real-hardware ROS2 bridge (`jointstatereader`) so the same so101_ros2 plugin pipeline captures real datasets. Key insight from Phase 5 audit: `jointstatereader` already reads Feetech leader/follower servos at 20 Hz and publishes `/joint_states`. To unify with the sim flow, it needs to additionally publish leader positions on `/joint_commands` (matches upstream `so_leader` teleop semantics), plus a pair of `usb_cam`/`realsense2_camera` ROS2 nodes wrapping the physical cameras on `/wrist_camera` + `/top_camera`. Zero plugin code changes — `record_sim.sh` + `verify_parity.py` work unchanged. Scope: ~5 plans, ~40 lines of Python in jointstatereader + launch/config files in vla_SO-ARM101 + docs. Requires real hardware for testing (Linux follow-up ideal).
+- ~~**V2-REAL-01**~~ → **Promoted into v1 as REAL-01 + REAL-02**. Superseded by Phase 6.
+- ~~**V2-REAL-UNIFIED**~~ → **Promoted into v1 as Phase 6 (REAL-01..04)**. Superseded.
 
 ### Pick-and-place capture (Linux / IsaacSim follow-up)
 
@@ -110,12 +117,17 @@ Deferred to a follow-up milestone.
 | VER-01 | Phase 5 — Pick-and-Place + Schema Parity | Complete |
 | VER-02 | Phase 5 — Pick-and-Place + Schema Parity | **Deferred** (moved to V2-LINUX-PICK-PLACE) |
 | VER-03 | Phase 5 — Pick-and-Place + Schema Parity | Complete |
+| REAL-01 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-02 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-03 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-04 | Phase 6 — Real-Hardware ROS2 Unification | Pending (may defer to hardware-required follow-up) |
 
 **Coverage:**
-- v1 requirements: 21 total
+- v1 requirements: **25 total** (21 original + 4 REAL-* promoted from V2)
 - Complete: 20 ✓
 - Deferred: 1 (VER-02 → V2-LINUX-PICK-PLACE, blocked on IsaacSim/Linux)
-- Mapped to phases: 21 ✓
+- Pending: 4 (REAL-01..04, Phase 6 — newly promoted)
+- Mapped to phases: 25 ✓
 - Unmapped: 0 ✓
 
 ---

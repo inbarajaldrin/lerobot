@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** User-directed add-on before v1 milestone can be closed
+**Current focus:** Phase 6 — Real-Hardware ROS2 Unification (scope expanded from V2)
 
 ## Current Position
 
-Phase: 5 of 5 (Capture + Schema Parity) — 2/3 + 1 deferred
-Plan: —
-Status: Phase 5 planned work shipped (VER-01 + VER-03). VER-02 deferred to V2-LINUX-PICK-PLACE. User has one more item to add before v1 milestone sign-off — NOT calling the milestone complete yet.
-Last activity: 2026-04-23 — Phase 5 runbook + verify_parity.py + base-yaw motion-test dataset shipped; schema parity PASS vs real target; VER-02 moved to V2-LINUX-PICK-PLACE
+Phase: 6 of 6 (Real-Hardware ROS2 Unification) — planned, not started
+Plan: `.planning/phases/06-real-hardware-unification/PLAN.md` written
+Status: Phases 1–5 shipped on Mac sim side. User expanded scope to include real-hw unification on Mac (was V2-REAL-UNIFIED). Phase 6 has 4 plans, 4 new requirements (REAL-01..04), ~40 lines of Python plus launch files + docs. Ready to execute when user says go OR when real SO-ARM101 hardware is ready to test against.
+Last activity: 2026-04-23 — scope expanded; Phase 6 PLAN.md landed; ROADMAP/REQUIREMENTS updated; v1 requirements 21 → 25.
 
-Progress: [█████████░] 93% (14/14 planned plans + 1 V2 follow-up)
+Progress: [███████░░░] 72% (14/18 planned plans + 1 V2 follow-up)
 
 ## Performance Metrics
 
@@ -111,4 +111,4 @@ Resume file: None — read the docs listed below.
 - 05-02: Automated motion-test recording via `drive_base_yaw_sweep.py`; `so_arm101_sim_base_yaw_v0` on Hub with schema parity PASS. Strict pick-and-place deferred to V2-LINUX-PICK-PLACE (blocked on Mac by Gazebo contact physics).
 - 05-03: "Record a dataset from scratch" runbook added to LEROBOT_ROS2_MAC_SETUP.md with ordered commands + troubleshooting table.
 
-**Paused at:** user signalled there's one more item to add before the v1 milestone can be closed. NOT invoking milestone-complete workflow until the user says what it is.
+**Paused at:** Phase 6 planned. Executing 6-01..03 needs no hardware (code + launch + docs only — static verification via mock serial). 6-04 (end-to-end real record) needs USB-connected SO-ARM101 leader + follower + wrist camera. User to signal: execute 6-01..03 now, OR wait until hardware is ready to do the full phase end-to-end.

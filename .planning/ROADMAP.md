@@ -11,6 +11,7 @@ Five phases that move from a stale PR #866 fork to a recorded pick-and-place sim
 - [x] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics ✅ 2026-04-23 (live-Gazebo checkpoint PASS)
 - [x] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub ✅ 2026-04-23
 - [x] **Phase 5: Capture + Schema Parity** — `verify_parity.py` script + 2 motion-test datasets on Hub (schema parity PASS) + reproducible runbook ✅ 2026-04-23. VER-02 (strict pick-and-place trajectory) deferred to V2-LINUX-PICK-PLACE — blocked on Mac by Gazebo's contact physics; reuses the Mac-proven recording pipeline on Linux+IsaacSim.
+- [ ] **Phase 6: Real-Hardware ROS2 Unification** — Extend `jointstatereader` for dual publishing (follower→/joint_states, leader→/joint_commands), add `image_tools/cam2image` launch for real cameras, document the real-hw recording path. Same `record_sim.sh` + `verify_parity.py` with zero plugin changes. Scope newly promoted from V2-REAL-UNIFIED.
 
 ## Phase Details
 
@@ -104,10 +105,22 @@ Plans:
 - [x] 05-02: Motion-test recording — base-yaw sweep automated via `drive_base_yaw_sweep.py`; 3 episodes, 527 frames, pushed to `inbarajaldrin/so_arm101_sim_base_yaw_v0`, parity PASS. Strict pick-and-place deferred to V2-LINUX-PICK-PLACE.
 - [x] 05-03: "Record a dataset from scratch" runbook added to `LEROBOT_ROS2_MAC_SETUP.md` — ordered commands + troubleshooting table
 
+### Phase 6: Real-Hardware ROS2 Unification (newly promoted from V2)
+
+**Goal**: Same record pipeline works for real SO-ARM101 hardware (leader+follower on USB + real cameras) as for sim. Zero plugin code changes; only `jointstatereader` extensions + camera launch files + runbook.
+**Depends on**: Phase 3 (plugins), Phase 4 (recorder), Phase 5 (parity verification)
+**Requirements**: REAL-01, REAL-02, REAL-03, REAL-04
+
+Plans:
+- [ ] 06-01: `jointstatereader` — dual publishing (`publish_source=follower` → /joint_states; leader → /joint_commands); backward-compat params preserved
+- [ ] 06-02: `vla_SO-ARM101/launch/real_cameras.launch.py` — `image_tools/cam2image` for generic USB wrist camera, optional `realsense2_camera` for top (usb_cam not in RoboStack osx-arm64)
+- [ ] 06-03: Runbook section "Record a dataset on real hardware" in `LEROBOT_ROS2_MAC_SETUP.md`; `record_sim.sh` → `record.sh` rename with symlink for back-compat
+- [ ] 06-04: End-to-end record with real hw (requires SO-ARM101 connected); `verify_parity.py` PASS on real dataset. If hw unavailable at execution, ship 06-01..03 and defer 06-04 to a follow-up session.
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertions yet).
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 (Phase 6 newly promoted from V2).
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -116,5 +129,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertion
 | 3. ROS2 BYOH Plugins | 4/4 | Complete | 2026-04-23 |
 | 4. Recorder End-to-End (v3 + HF Hub) | 4/4 | Complete | 2026-04-23 |
 | 5. Capture + Schema Parity | 2/3 + 1 deferred | Complete (VER-02 deferred) | 2026-04-23 |
+| 6. Real-Hardware ROS2 Unification | 0/4 | Not started | - |
 
-**Total:** 5 phases, 14 plans (down from 15 after Phase 2 collapse), 21 v1 requirements — full coverage.
+**Total:** **6 phases, 18 plans** (Phase 6 added 4 plans from V2-REAL-UNIFIED promotion), 25 v1 requirements (21 original + 4 new REAL-* promoted from V2).
