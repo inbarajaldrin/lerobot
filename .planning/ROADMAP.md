@@ -7,7 +7,7 @@ Five phases that move from a stale PR #866 fork to a recorded pick-and-place sim
 ## Phases
 
 - [x] **Phase 1: Rebase & Port ROS2 Camera** — Move fork to upstream main, bring PR #866's ROS2 camera forward as `src/lerobot/cameras/ros2/` subpackage ✅ 2026-04-23
-- [ ] **Phase 2: Sim Parity (URDF + Top Camera)** — Rename URDF joints to HF canonical, add top camera SDF sensor + bridge
+- [x] **Phase 2: Sim Parity (Top Camera)** — Add top camera SDF sensor + bridge ✅ 2026-04-23 (URDF joint rename turned out to already be canonical — no-op)
 - [ ] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics
 - [ ] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub
 - [ ] **Phase 5: Pick-and-Place Capture + Schema Parity** — Record the target episode, assert parity against real HF dataset
@@ -31,21 +31,24 @@ Plans:
 - [ ] 01-02: Extract ROS2 camera into a standalone `lerobot_camera_ros2` package (plugin layout, `@CameraConfig.register_subclass("ros2")`, editable install)
 - [ ] 01-03: Update the Mac pixi env to install rebased lerobot + new plugin; re-run L1 smoke; update `LEROBOT_ROS2_MAC_SETUP.md`
 
-### Phase 2: Sim Parity (URDF + Top Camera)
+### Phase 2: Sim Parity (Top Camera)
 
-**Goal**: Gazebo launch publishes `/joint_states` with HF canonical joint names and both `/wrist_camera` + `/top_camera` image topics — the sim-side wire format matches the real SO-101 contract.
+**Goal**: Gazebo launch publishes both `/wrist_camera` + `/top_camera` image topics — the sim-side camera contract matches the real SO-101 dataset's two-camera schema.
 **Depends on**: Phase 1
-**Requirements**: FOUND-04, OBS-03
+**Requirements**: FOUND-04 (no-op, verified canonical), OBS-03
 **Success Criteria** (what must be TRUE):
-  1. `ros2 topic echo /joint_states` during `gazebo.launch.py` shows names `['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper_joint']` in that order
-  2. `ros2 topic list` includes both `/wrist_camera` and `/top_camera`, each emitting `sensor_msgs/Image` at the target resolution and FPS
-  3. MoveIt + controller YAML still load without errors after the rename (arm still responds to `so_arm101_control` GUI commands)
-  4. `vla_SO-ARM101/docs/pipeline_diagram.html` refreshed to reflect the new topic set
-**Plans**: 2 plans
+  1. `xacro so_arm101.gazebo.xacro` converts to URDF without errors; no duplicate link/joint names
+  2. `gazebo.launch.py` imports without error; `parameter_bridge` topic list includes `/top_camera` + `/top_camera/camera_info`
+  3. When Gazebo is running: `ros2 topic list` shows both `/wrist_camera` and `/top_camera`, each emitting `sensor_msgs/Image` at 640×480 @ 30 fps R8G8B8
+  4. `ros2 topic hz /top_camera` reports ≥ 25 Hz sustained
+  5. `vla_SO-ARM101/docs/pipeline_diagram.html` refreshed to reflect the two-camera sim topic set
+
+Runtime success criteria (3–4) are validated outside this mac-env pixi env — they require the full SO-ARM101 Gazebo stack, which is a separate environment. Phase 2 delivers the code + a static-verification checkpoint; runtime verification is recorded in Phase 5's full-stack runbook.
+
+**Plans**: 1 plan
 
 Plans:
-- [ ] 02-01: URDF/xacro joint rename + propagate to SRDF, controllers, launch files, `control_gui.py` references; verify with a launch + joint_state_publisher roundtrip
-- [ ] 02-02: Add `top_camera` SDF sensor to `so_arm101.gazebo.xacro`, bridge entry to `gazebo.launch.py`, pick its pose for a useful top-down view
+- [ ] 02-01: Add `top_camera` SDF sensor to `so_arm101.gazebo.xacro` (new `top_camera_link` at ~0.6 m above world origin looking straight down, 640×480 @ 30 fps R8G8B8), add bridge entries to `gazebo.launch.py` for `/top_camera` and `/top_camera/camera_info`. Preserve user's uncommitted edits in `gazebo.launch.py`.
 
 ### Phase 3: ROS2 BYOH Plugins (Robot + Teleop)
 
@@ -108,9 +111,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertion
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Rebase & Port ROS2 Camera | 3/3 | Complete | 2026-04-23 |
-| 2. Sim Parity (URDF + Top Camera) | 0/2 | Not started | - |
+| 2. Sim Parity (Top Camera) | 1/1 | Complete | 2026-04-23 |
 | 3. ROS2 BYOH Plugins | 0/4 | Not started | - |
 | 4. Recorder End-to-End (v3 + HF Hub) | 0/3 | Not started | - |
 | 5. Pick-and-Place + Schema Parity | 0/3 | Not started | - |
 
-**Total:** 5 phases, 15 plans, 21 v1 requirements — full coverage.
+**Total:** 5 phases, 14 plans (down from 15 after Phase 2 collapse), 21 v1 requirements — full coverage.

@@ -10,7 +10,7 @@
 - [ ] **FOUND-01**: `huggingface/lerobot` fork (`inbarajaldrin/lerobot`) rebased onto current upstream `main` — no longer on the pre-reorg `ros2_camera` branch
 - [ ] **FOUND-02**: Existing `ROS2Camera` code from PR #866 ported to upstream's `src/lerobot/cameras/ros2/` layout (or packaged as the `lerobot_camera_ros2` BYOH plugin — whichever turns out simpler during execution)
 - [ ] **FOUND-03**: Pixi env on Mac installs the rebased lerobot editable + ROS2 Python bindings + CycloneDDS cleanly; all smoke imports work
-- [ ] **FOUND-04**: SO-ARM101 URDF joints renamed to HF canonical: `Rotation→shoulder_pan`, `Pitch→shoulder_lift`, `Elbow→elbow_flex`, `Wrist_Pitch→wrist_flex`, `Wrist_Roll→wrist_roll`, `Jaw→gripper_joint`. MoveIt SRDF, controller YAML, and launch files updated to match
+- [x] **FOUND-04**: ~~SO-ARM101 URDF joints renamed to HF canonical~~ — **already canonical** (verified 2026-04-23 by grep of `src/so_arm101_description/urdf/so_arm101.gazebo.xacro`, `so_arm101.srdf`, `joint_limits.yaml`, `ros2_controllers.yaml`). No code change needed. Original REQ assumed the URDF used `Rotation/Pitch/Elbow/Wrist_Pitch/Wrist_Roll/Jaw` — that was a misread of our own synthetic smoke script.
 
 ### Observation
 
@@ -87,8 +87,8 @@ Deferred to a follow-up milestone.
 | FOUND-01 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
 | FOUND-02 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
 | FOUND-03 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
-| FOUND-04 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
-| OBS-03 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
+| FOUND-04 | Phase 2 — Sim Parity (Top Camera) | Complete (no-op, verified) |
+| OBS-03 | Phase 2 — Sim Parity (Top Camera) | Complete (code; runtime verify deferred to Phase 5) |
 | OBS-01 | Phase 3 — ROS2 BYOH Plugins | Pending |
 | OBS-02 | Phase 3 — ROS2 BYOH Plugins | Pending |
 | OBS-04 | Phase 3 — ROS2 BYOH Plugins | Pending |

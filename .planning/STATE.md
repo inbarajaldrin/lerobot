@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** Phase 2 — Sim Parity (URDF + Top Camera)
+**Current focus:** Phase 3 — ROS2 BYOH Plugins (Robot + Teleop)
 
 ## Current Position
 
-Phase: 2 of 5 (Sim Parity — URDF + Top Camera)
+Phase: 3 of 5 (ROS2 BYOH Plugins — Robot + Teleop)
 Plan: — (not yet planned)
-Status: Phase 1 complete; Phase 2 ready to plan
-Last activity: 2026-04-23 — Phase 1 shipped (rebase onto upstream main, ROS2 camera ported, L1 smoke green)
+Status: Phase 2 complete; Phase 3 ready to plan
+Last activity: 2026-04-23 — Phase 2 shipped (top camera SDF + bridge; FOUND-04 turned out to be a no-op)
 
-Progress: [██░░░░░░░░] 20% (3/15 plans complete)
+Progress: [███░░░░░░░] 29% (4/14 plans complete)
 
 ## Performance Metrics
 
@@ -71,6 +71,6 @@ Items acknowledged and carried forward from the v2 list:
 
 ## Session Continuity
 
-Last session: 2026-04-23 Phase 1 execution
-Stopped at: Phase 1 shipped on `ros2-camera-on-main` (local, not pushed). mac-env/ relocated to Exploring-VLAs. Ready for Phase 2 planning.
+Last session: 2026-04-23 Phase 2 execution (same session as Phase 1)
+Stopped at: Phase 2 code shipped on Exploring-VLAs main (top camera in gazebo.xacro + bridge in gazebo.launch.py). Phase 1+2 commits local only, not pushed. Ready for Phase 3 planning.
 Resume file: None

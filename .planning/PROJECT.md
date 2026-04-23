@@ -17,6 +17,7 @@ A unified data-collection stack that produces **co-trainable `LeRobotDataset v3`
 - ✓ `huggingface/lerobot` fork on user's GitHub (`inbarajaldrin/lerobot`) — existing (pre-project)
 - ✓ PR #866 `ROS2Camera` proven functional on macOS with CycloneDDS — existing (pre-project, L1 smoke)
 - ✓ `jointstatereader` node in `vla_SO-ARM101/src/jointstatereader/` publishing canonical SO-101 joint names (`shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper_joint`) — existing
+- ✓ SO-ARM101 URDF + MoveIt configs already use canonical joint names (URDF xacro, SRDF, `joint_limits.yaml`, `ros2_controllers.yaml` — verified 2026-04-23). No rename needed.
 - ✓ SO-ARM101 Gazebo stack publishing `/wrist_camera` via `ros_gz_bridge` (1280×720 @ 30fps) — existing
 - ✓ Pixi env on Mac with ROS2 Jazzy + lerobot editable install — existing (pre-project, L2 smoke)
 
@@ -32,7 +33,7 @@ A unified data-collection stack that produces **co-trainable `LeRobotDataset v3`
 - [ ] **REC-06** — Episode orchestration matches HF flow: `--dataset.num_episodes`, `--dataset.episode_time_s`, keyboard controls (→ end, ← redo, Esc stop), auto-reset between episodes
 - [ ] **REC-07** — `dataset.push_to_hub` works end-to-end; dataset appears on the Hub browsable next to colleague's real dataset
 - [ ] **REC-08** — Gazebo sim publishes a `top_camera` on ROS2 (via SDF sensor + `ros_gz_bridge`) at matching resolution/fps to the real dataset's `top` camera — parity for multi-camera training
-- [ ] **REC-09** — SO-ARM101 URDF joints renamed to canonical (`Rotation→shoulder_pan`, `Pitch→shoulder_lift`, `Elbow→elbow_flex`, `Wrist_Pitch→wrist_flex`, `Wrist_Roll→wrist_roll`, `Jaw→gripper_joint`); MoveIt + controllers updated accordingly
+- [ ] ~~**REC-09** — SO-ARM101 URDF joints renamed to canonical~~ — **already canonical, verified 2026-04-23. Moved to Validated.**
 - [ ] **REC-10** — Pick-and-place sim episode recorded end-to-end (controls owner drives the arm; recorder captures). At least 1 episode matches schema of colleague's real dataset bit-for-bit (except pixel values and action provenance)
 - [ ] **REC-11** — `dataset.finalize()` called before push — avoids corrupt parquet (v3 gotcha from docs)
 - [ ] **VERIFY-01** — Download colleague's real HF dataset, load ours via `LeRobotDataset()`, assert `features.keys()` and shapes match. Fail loud if they don't
