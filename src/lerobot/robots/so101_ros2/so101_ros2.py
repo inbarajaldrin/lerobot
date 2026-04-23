@@ -14,13 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-from functools import cached_property
+from __future__ import annotations
 
+import logging
+import threading
+import time
+from functools import cached_property
+from typing import TYPE_CHECKING, Any
+
+from lerobot.cameras import make_cameras_from_configs
+from lerobot.cameras.ros2 import ROS2Camera
 from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.decorators import (
+    check_if_already_connected,
+    check_if_not_connected,
+)
+from lerobot.utils.errors import DeviceNotConnectedError
+from lerobot.utils.import_utils import _rclpy_available, require_package
 
 from ..robot import Robot
 from .config_so101_ros2 import SO101ROS2RobotConfig
+
+if TYPE_CHECKING or _rclpy_available:
+    import rclpy  # type: ignore
+    from rclpy.qos import qos_profile_sensor_data  # type: ignore
+    from sensor_msgs.msg import JointState  # type: ignore
+else:
+    rclpy = None  # type: ignore
+    JointState = None  # type: ignore
+    qos_profile_sensor_data = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -29,28 +51,52 @@ class SO101ROS2Robot(Robot):
     """SO-ARM101 arm consumed over ROS2 topics.
 
     Observation sources:
-        * joint state:   `sensor_msgs/JointState` on `cfg.joint_states_topic`.
-        * cameras:       each entry in `cfg.cameras` (typically `ROS2CameraConfig`).
+        * joint state:  `sensor_msgs/JointState` on `cfg.joint_states_topic`.
+        * cameras:      each entry in `cfg.cameras` (typically `ROS2CameraConfig`).
 
     Actions:
-        `send_action` is a no-op. The sim/real controls owner drives the arm
-        and publishes its goal on its own topic; the companion `so101_ros2`
-        Teleoperator plugin reads that topic. This Robot class exists solely
-        to produce `observation` rows for `lerobot-record`.
+        `send_action` is a no-op returning its input unchanged. The sim/real
+        controls owner drives the arm and publishes its goal on its own topic;
+        the companion `so101_ros2` Teleoperator plugin reads that topic. This
+        Robot class exists solely to produce `observation` rows for
+        `lerobot-record`.
 
-    03-01 ships the skeleton (registration, features, stubs). 03-02 fills in
-    the rclpy singleton, subscriptions, and `get_observation`.
+    rclpy lifecycle:
+        We piggyback on `ROS2Camera`'s class-level singleton (`_rclpy_node`,
+        spin thread, context). That means this Robot shares one node with any
+        cameras it owns — one spin thread pumps all subscriptions, and
+        lifecycle is tied to whichever component disconnects last. If no
+        cameras are configured, the rclpy context stays up for the life of the
+        process (the daemon spin thread dies on interpreter exit); acceptable
+        for recording runs, revisit if we ever embed this in long-running
+        services. Intentional deviation from PLAN.md 03-02's stand-alone
+        `_ROS2Node` proposal: sharing the camera singleton is simpler and
+        avoids running two rclpy spin threads side-by-side.
     """
 
     config_class = SO101ROS2RobotConfig
     name = "so101_ros2"
 
     def __init__(self, config: SO101ROS2RobotConfig):
+        require_package("rclpy", extra="ros2", import_name="rclpy")
+
         super().__init__(config)
         self.config = config
         self._is_connected: bool = False
-        # 03-02 will populate: the shared rclpy node handle, the joint-state
-        # subscription, the cached latest state, and the camera dict.
+
+        # Shared rclpy resources — populated on connect.
+        self._node: Any = None
+        self._joint_state_sub: Any = None
+
+        # Latest remapped {canonical_joint: position}. Updated from the
+        # background spin thread; protected by _state_lock.
+        self._state_lock = threading.Lock()
+        self._latest_state: dict[str, float] | None = None
+        self._latest_state_time: float = 0.0
+
+        self.cameras = make_cameras_from_configs(config.cameras)
+
+    # ------------------------------------------------------------- features
 
     @cached_property
     def _motors_ft(self) -> dict[str, type]:
@@ -71,14 +117,11 @@ class SO101ROS2Robot(Robot):
     def action_features(self) -> dict[str, type]:
         return self._motors_ft
 
+    # ------------------------------------------------------------ lifecycle
+
     @property
     def is_connected(self) -> bool:
         return self._is_connected
-
-    def connect(self, calibrate: bool = True) -> None:
-        # 03-02: acquire shared rclpy node, create JointState subscription,
-        # connect cameras, block until first /joint_states arrives.
-        raise NotImplementedError("SO101ROS2Robot.connect is implemented in 03-02.")
 
     @property
     def is_calibrated(self) -> bool:
@@ -90,16 +133,116 @@ class SO101ROS2Robot(Robot):
     def configure(self) -> None:
         return
 
-    def get_observation(self) -> RobotObservation:
-        # 03-02: canonical-named {joint}.pos from latest /joint_states
-        # (applying cfg.joint_name_map) plus each camera's async_read.
-        raise NotImplementedError("SO101ROS2Robot.get_observation is implemented in 03-02.")
+    @check_if_already_connected
+    def connect(self, calibrate: bool = True) -> None:
+        # Bring up the shared rclpy context (idempotent across ROS2Camera +
+        # this Robot). Reuses the camera's singleton node so all subscriptions
+        # ride one spin thread.
+        ROS2Camera._ensure_rclpy_started()
+        self._node = ROS2Camera._rclpy_node
+        if self._node is None:
+            raise RuntimeError("Failed to acquire shared rclpy node from ROS2Camera.")
 
+        self._joint_state_sub = self._node.create_subscription(
+            JointState,
+            self.config.joint_states_topic,
+            self._on_joint_state,
+            qos_profile_sensor_data,
+        )
+
+        # Cameras bring up their own subscriptions on the same shared node.
+        for cam in self.cameras.values():
+            cam.connect()
+
+        # Block for the first JointState so get_observation never races the
+        # subscriber startup. Raise a descriptive TimeoutError on miss — the
+        # most common cause is a QoS mismatch or a broken
+        # joint_state_broadcaster spawner upstream of the topic.
+        deadline = time.perf_counter() + self.config.state_timeout_s
+        while True:
+            with self._state_lock:
+                ready = self._latest_state is not None
+            if ready:
+                break
+            if time.perf_counter() >= deadline:
+                self._drop_subscription()
+                raise TimeoutError(
+                    f"{self}: no message on '{self.config.joint_states_topic}' "
+                    f"within state_timeout_s={self.config.state_timeout_s}s. "
+                    f"Check that `ros2 topic echo {self.config.joint_states_topic}` "
+                    f"produces output with joint names that overlap with "
+                    f"{self.config.joint_names} (after applying "
+                    f"joint_name_map={self.config.joint_name_map})."
+                )
+            time.sleep(0.05)
+
+        self._is_connected = True
+        logger.info("%s connected. First /joint_states keys: %s",
+                    self, sorted(self._latest_state or {}))
+
+    def _on_joint_state(self, msg: Any) -> None:
+        """Spin-thread callback. Remaps names via cfg.joint_name_map and
+        caches the latest state so get_observation never blocks on ROS."""
+        name_map = self.config.joint_name_map
+        remapped: dict[str, float] = {}
+        # JointState.name and .position are parallel arrays.
+        for raw_name, pos in zip(msg.name, msg.position, strict=False):
+            canonical = name_map.get(raw_name, raw_name)
+            remapped[canonical] = float(pos)
+        with self._state_lock:
+            self._latest_state = remapped
+            self._latest_state_time = time.monotonic()
+
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        with self._state_lock:
+            state = self._latest_state
+        if state is None:
+            raise DeviceNotConnectedError(
+                f"{self}: no /joint_states received yet (post-connect race)."
+            )
+
+        # Enforce canonical key order + fail loud on missing joints.
+        obs: dict[str, Any] = {}
+        for joint in self.config.joint_names:
+            if joint not in state:
+                raise KeyError(
+                    f"{self}: joint '{joint}' not found in latest /joint_states. "
+                    f"Present joints: {sorted(state)}. Check joint_name_map "
+                    f"or the publisher's joint list."
+                )
+            obs[f"{joint}.pos"] = state[joint]
+
+        for cam_key, cam in self.cameras.items():
+            obs[cam_key] = cam.async_read(timeout_ms=self.config.image_timeout_ms)
+
+        return obs
+
+    @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        # The controls owner drives the sim externally. Return the action
-        # unchanged so the record loop sees a valid echo.
+        # No-op per D5 in PLAN.md: controls owner drives the sim externally.
         return action
 
+    # -------------------------------------------------------------- teardown
+
+    def _drop_subscription(self) -> None:
+        if self._joint_state_sub is not None and self._node is not None:
+            try:
+                self._node.destroy_subscription(self._joint_state_sub)
+            except Exception:  # nosec B110 — best-effort cleanup
+                pass
+        self._joint_state_sub = None
+
     def disconnect(self) -> None:
-        # 03-02: destroy subscription, disconnect cameras, release node.
+        if not self._is_connected and self._joint_state_sub is None:
+            return
+        self._drop_subscription()
+        for cam in self.cameras.values():
+            try:
+                cam.disconnect()
+            except Exception as e:  # nosec B110
+                logger.warning("%s: camera %r disconnect failed: %s", self, cam, e)
         self._is_connected = False
+        # Do not tear down the shared rclpy node here; the camera singleton
+        # owns that lifecycle (last camera disconnect triggers shutdown).
+        logger.info("%s disconnected.", self)
