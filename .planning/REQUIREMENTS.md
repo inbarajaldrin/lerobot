@@ -49,10 +49,13 @@
 
 ### Real-Hardware Unification (newly promoted from V2 into v1)
 
-- [ ] **REAL-01**: Extend `jointstatereader` for dual publishing. Default `publish_source='follower'` emits real follower-arm positions on `/joint_states` (matches sim semantics); a new `/joint_commands` publisher always emits real leader-arm positions (matches upstream `so_leader` teleop contract). Backward-compat preserved via the `publish_source='leader'` fallback.
+- [ ] **REAL-01**: Extend `jointstatereader` for dual publishing + a `/joint_commands` subscriber mode that writes to follower servos. Default `publish_source='follower'` emits real follower-arm positions on `/joint_states` (matches sim semantics); a new `/joint_commands` publisher always emits real leader-arm positions (matches upstream `so_leader` teleop contract). Backward-compat preserved via `publish_source='leader'` fallback.
 - [ ] **REAL-02**: ROS2 launch for real cameras. `vla_SO-ARM101/launch/real_cameras.launch.py` uses `image_tools/cam2image` for a generic USB wrist camera (`ros-jazzy-usb-cam` is not in RoboStack osx-arm64) with an optional `realsense2_camera` top-camera variant behind a launch arg.
-- [ ] **REAL-03**: Runbook — "Record a dataset on real hardware" section in `LEROBOT_ROS2_MAC_SETUP.md`. Steps: USB perms / port discovery → `jointstatereader` + real_cameras launch → `record_sim.sh` (or the renamed `record.sh`) → `verify_parity.py`.
-- [ ] **REAL-04**: End-to-end real-hardware recording — verify_parity PASS on a dataset captured with live USB + real cameras. Requires connected SO-ARM101 hardware; if unavailable at Phase 6 execution, 06-04 becomes a hardware-required follow-up but 06-01..03 still land.
+- [ ] **REAL-03**: Runbook — "Record a dataset on real hardware" section in `LEROBOT_ROS2_MAC_SETUP.md`. `record_sim.sh → record.sh` rename with back-compat symlink.
+- [ ] **REAL-04**: Sim ground-truth publisher — new Python node in `vla_SO-ARM101` that reads spawned-object world poses from Gazebo and publishes `/objects_poses_sim` (`tf2_msgs/TFMessage`, one TransformStamped per object) + `/objects_bbox_sim` (`std_msgs/String` with JSON `{name: {sx, sy, sz}}`) at 10 Hz / 1 Hz respectively. control_gui (sim mode) consumes both.
+- [ ] **REAL-05**: `aruco_camera_localizer` param/bbox additions. New ROS2 params `objects_poses_topic` (default `/objects_poses_real`) + `objects_bbox_topic` (default `/objects_bbox_real`); bbox publisher dumping known object dimensions from `aruco_config.json` at 1 Hz in the same JSON schema as sim. Lands in `inbarajaldrin/aruco_camera_localizer@robosort`.
+- [ ] **REAL-06**: Unified `ROS2_MAC_SETUP.md` new doc — covers pixi bootstrap + clone all related repos (`aruco_camera_localizer`, `Exploring-VLAs`, RoboSort if relevant) + build the colcon workspace. `LEROBOT_ROS2_MAC_SETUP.md` becomes the lerobot-recording extension that links to it.
+- [ ] **REAL-07**: End-to-end real-hardware recording — verify_parity PASS on a dataset captured with live USB + real cameras + driven by control_gui real mode consuming aruco poses. Requires connected SO-ARM101 hardware.
 
 ## v2 Requirements
 
@@ -120,14 +123,17 @@ Deferred to a follow-up milestone.
 | REAL-01 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
 | REAL-02 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
 | REAL-03 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
-| REAL-04 | Phase 6 — Real-Hardware ROS2 Unification | Pending (may defer to hardware-required follow-up) |
+| REAL-04 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-05 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-06 | Phase 6 — Real-Hardware ROS2 Unification | Pending |
+| REAL-07 | Phase 6 — Real-Hardware ROS2 Unification | Pending (may defer to hardware-required follow-up) |
 
 **Coverage:**
-- v1 requirements: **25 total** (21 original + 4 REAL-* promoted from V2)
+- v1 requirements: **28 total** (21 original + 7 REAL-* promoted from V2 after post-audit scope refinement)
 - Complete: 20 ✓
 - Deferred: 1 (VER-02 → V2-LINUX-PICK-PLACE, blocked on IsaacSim/Linux)
-- Pending: 4 (REAL-01..04, Phase 6 — newly promoted)
-- Mapped to phases: 25 ✓
+- Pending: 7 (REAL-01..07, Phase 6)
+- Mapped to phases: 28 ✓
 - Unmapped: 0 ✓
 
 ---

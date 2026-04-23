@@ -112,10 +112,13 @@ Plans:
 **Requirements**: REAL-01, REAL-02, REAL-03, REAL-04
 
 Plans:
-- [ ] 06-01: `jointstatereader` — dual publishing (`publish_source=follower` → /joint_states; leader → /joint_commands); backward-compat params preserved
-- [ ] 06-02: `vla_SO-ARM101/launch/real_cameras.launch.py` — `image_tools/cam2image` for generic USB wrist camera, optional `realsense2_camera` for top (usb_cam not in RoboStack osx-arm64)
-- [ ] 06-03: Runbook section "Record a dataset on real hardware" in `LEROBOT_ROS2_MAC_SETUP.md`; `record_sim.sh` → `record.sh` rename with symlink for back-compat
-- [ ] 06-04: End-to-end record with real hw (requires SO-ARM101 connected); `verify_parity.py` PASS on real dataset. If hw unavailable at execution, ship 06-01..03 and defer 06-04 to a follow-up session.
+- [ ] 06-01: `jointstatereader` — dual publishing (`publish_source=follower` → /joint_states; leader → /joint_commands) + subscriber mode (writes `/joint_commands` to follower_serial); backward-compat preserved
+- [ ] 06-02: `vla_SO-ARM101/launch/real_cameras.launch.py` — `image_tools/cam2image` for generic USB wrist camera, optional `realsense2_camera` for top
+- [ ] 06-03: Runbook section "Record a dataset on real hardware" + `record_sim.sh → record.sh` rename with symlink for back-compat
+- [ ] 06-04: Sim ground-truth publisher — Python node in `vla_SO-ARM101` publishing `/objects_poses_sim` (TFMessage) + `/objects_bbox_sim` (String+JSON) from Gazebo world state
+- [ ] 06-05: `aruco_camera_localizer` (in `inbarajaldrin/aruco_camera_localizer@robosort`) — add `objects_poses_topic`/`objects_bbox_topic` params + bbox publisher (JSON of known object dims)
+- [ ] 06-06: Unified `ROS2_MAC_SETUP.md` new doc — pixi + all repos + colcon; `LEROBOT_ROS2_MAC_SETUP.md` links to it
+- [ ] 06-07: End-to-end real record — control_gui real mode consumes aruco poses, drives arm through jointstatereader, recorder captures, verify_parity PASS. Requires connected SO-ARM101.
 
 ## Progress
 
@@ -129,6 +132,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 (Phase 6 newly 
 | 3. ROS2 BYOH Plugins | 4/4 | Complete | 2026-04-23 |
 | 4. Recorder End-to-End (v3 + HF Hub) | 4/4 | Complete | 2026-04-23 |
 | 5. Capture + Schema Parity | 2/3 + 1 deferred | Complete (VER-02 deferred) | 2026-04-23 |
-| 6. Real-Hardware ROS2 Unification | 0/4 | Not started | - |
+| 6. Real-Hardware ROS2 Unification | 0/7 | Not started | - |
 
-**Total:** **6 phases, 18 plans** (Phase 6 added 4 plans from V2-REAL-UNIFIED promotion), 25 v1 requirements (21 original + 4 new REAL-* promoted from V2).
+**Total:** **6 phases, 21 plans** (Phase 6 added 7 after post-audit scope refinement), 28 v1 requirements (21 original + 7 new REAL-* promoted from V2).

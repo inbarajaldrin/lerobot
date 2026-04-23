@@ -230,14 +230,38 @@ The name was apt when sim was the only mode. For real-hardware use it's misleadi
 
 **Recommended:** rename to `record.sh`, symlink `record_sim.sh` → `record.sh`. Lands in 6-03.
 
+## Scope expansion (2026-04-23) — after aruco_camera_localizer inventory + control_gui contract audit
+
+**Key findings that reshaped the plan:**
+
+1. **`aruco_camera_localizer` already does ~90% of real-side detection.** Its `robot_config.yaml` has an `active_robot: 'so_arm101'` section. It publishes **aggregated `/objects_poses`** as `tf2_msgs/TFMessage` — exactly the message type control_gui subscribes to at `control_gui.py:2358`. Mac-compatible via `cv2.VideoCapture` + AVFoundation. Has both ArUco + YOLO modes + hybrid + drop-offset. Mostly needs a topic-name param and a bbox publisher.
+2. **`/objects_bbox_*` contract is simpler than I'd assumed.** `control_gui.py:272` subscribes to `std_msgs/String`; callback at `:2343` does `json.loads(msg.data)` into `{name: {sx, sy, sz}}` — these are **object physical dimensions**, not per-frame 2D bboxes. Publishing these is a ~15-line JSON dump from a known-object-size catalog.
+3. **No sim ground-truth publisher exists.** `/objects_poses_sim` + `/objects_bbox_sim` aren't wired on the Gazebo side yet. Needs a small new ROS2 node (Python, not a C++ plugin) that reads world pose info and publishes the two topics.
+4. **`aruco_camera_localizer` edits land directly in its own repo** (`inbarajaldrin/aruco_camera_localizer@robosort`), not inside `Exploring-VLAs`. User-owned remote, push-access confirmed.
+
+**Final Phase 6 shape (6 plans):**
+
+| Plan | Scope | Gates on hardware? |
+|---|---|---|
+| 06-01 | `jointstatereader` dual-publish + `/joint_commands` subscriber-writes-follower mode | No |
+| 06-02 | `real_cameras.launch.py` — cam2image wrist + optional realsense top | No |
+| 06-03 | Real-hardware runbook + `record_sim.sh → record.sh` rename | No |
+| 06-04 | **Sim ground-truth publisher** (NEW) — Python node in `vla_SO-ARM101` publishing `/objects_poses_sim` (TFMessage) + `/objects_bbox_sim` (String+JSON) from Gazebo world pose info at 10 Hz | No |
+| 06-05 | **Aruco bbox + topic naming** (NEW) — params `objects_poses_topic` / `objects_bbox_topic` + String/JSON bbox publisher dumping known dimensions from `aruco_config.json` at 1 Hz. Lands in `inbarajaldrin/aruco_camera_localizer@robosort` | No |
+| 06-06 | Unified `ROS2_MAC_SETUP.md` (NEW) — general ROS2-on-Mac setup; existing lerobot doc links to it | No |
+| 06-07 | End-to-end real record + verify_parity PASS | **Yes** |
+
 ## Acceptance for Phase 6
 
 | Plan | Acceptance |
 |---|---|
-| 6-01 | jointstatereader has dual publishing, backward compat preserved, static tests pass |
-| 6-02 | real_cameras.launch.py starts when hardware present; documented with fallbacks |
-| 6-03 | Runbook section reads cleanly, troubleshooting covers likely failures |
-| 6-04 | verify_parity PASS on real-recorded dataset (OR deferred with clear "hardware required" status) |
+| 06-01 | jointstatereader has dual publishing + subscribe-and-write mode; backward compat preserved; static tests pass |
+| 06-02 | real_cameras.launch.py starts when hardware present; documented with fallbacks |
+| 06-03 | Runbook section reads cleanly; `record.sh` symlink lands; troubleshooting covers likely failures |
+| 06-04 | Python node publishes `/objects_poses_sim` + `/objects_bbox_sim` when Gazebo is running with a spawned object; control_gui (sim mode) successfully consumes them |
+| 06-05 | `localize_aruco --ros-args -p objects_poses_topic:=/objects_poses_real -p objects_bbox_topic:=/objects_bbox_real` publishes both topics when ArUco markers are in frame |
+| 06-06 | Fresh Mac follows `ROS2_MAC_SETUP.md` → pixi env up + all four repos built; then follows `LEROBOT_ROS2_MAC_SETUP.md` → recording works |
+| 06-07 | verify_parity PASS on real-recorded dataset (OR deferred with clear "hardware required" status) |
 
 ## Risks
 
