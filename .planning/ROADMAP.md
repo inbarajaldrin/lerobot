@@ -6,7 +6,7 @@ Five phases that move from a stale PR #866 fork to a recorded pick-and-place sim
 
 ## Phases
 
-- [ ] **Phase 1: Rebase & Port ROS2 Camera** — Move fork to upstream main, bring PR #866's ROS2 camera forward as `lerobot_camera_ros2`
+- [x] **Phase 1: Rebase & Port ROS2 Camera** — Move fork to upstream main, bring PR #866's ROS2 camera forward as `src/lerobot/cameras/ros2/` subpackage ✅ 2026-04-23
 - [ ] **Phase 2: Sim Parity (URDF + Top Camera)** — Rename URDF joints to HF canonical, add top camera SDF sensor + bridge
 - [ ] **Phase 3: ROS2 BYOH Plugins (Robot + Teleop)** — Author two plugins so `lerobot-record` can drive sim through topics
 - [ ] **Phase 4: Recorder End-to-End (v3 + HF Hub)** — Wire `--mode sim|real`, episode orchestration, dataset.finalize, push_to_hub
@@ -107,7 +107,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 (no decimal insertion
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Rebase & Port ROS2 Camera | 0/3 | Not started | - |
+| 1. Rebase & Port ROS2 Camera | 3/3 | Complete | 2026-04-23 |
 | 2. Sim Parity (URDF + Top Camera) | 0/2 | Not started | - |
 | 3. ROS2 BYOH Plugins | 0/4 | Not started | - |
 | 4. Recorder End-to-End (v3 + HF Hub) | 0/3 | Not started | - |

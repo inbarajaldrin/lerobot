@@ -84,9 +84,9 @@ Deferred to a follow-up milestone.
 
 | Requirement | Phase | Status |
 |---|---|---|
-| FOUND-01 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
-| FOUND-02 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
-| FOUND-03 | Phase 1 — Rebase & Port ROS2 Camera | Pending |
+| FOUND-01 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
+| FOUND-02 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
+| FOUND-03 | Phase 1 — Rebase & Port ROS2 Camera | Complete |
 | FOUND-04 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
 | OBS-03 | Phase 2 — Sim Parity (URDF + Top Camera) | Pending |
 | OBS-01 | Phase 3 — ROS2 BYOH Plugins | Pending |

@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-23)
 
 **Core value:** One `lerobot-record` invocation, two modes, one dataset schema — sim and real datasets co-trainable with zero schema adapters.
-**Current focus:** Phase 1 — Rebase & Port ROS2 Camera
+**Current focus:** Phase 2 — Sim Parity (URDF + Top Camera)
 
 ## Current Position
 
-Phase: 1 of 5 (Rebase & Port ROS2 Camera)
+Phase: 2 of 5 (Sim Parity — URDF + Top Camera)
 Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-04-23 — initialized project (PROJECT.md, config.json, REQUIREMENTS.md, ROADMAP.md committed)
+Status: Phase 1 complete; Phase 2 ready to plan
+Last activity: 2026-04-23 — Phase 1 shipped (rebase onto upstream main, ROS2 camera ported, L1 smoke green)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 20% (3/15 plans complete)
 
 ## Performance Metrics
 
@@ -71,6 +71,6 @@ Items acknowledged and carried forward from the v2 list:
 
 ## Session Continuity
 
-Last session: 2026-04-23 init
-Stopped at: Roadmap + state written; project ready for `/gsd-plan-phase 1`
+Last session: 2026-04-23 Phase 1 execution
+Stopped at: Phase 1 shipped on `ros2-camera-on-main` (local, not pushed). mac-env/ relocated to Exploring-VLAs. Ready for Phase 2 planning.
 Resume file: None
