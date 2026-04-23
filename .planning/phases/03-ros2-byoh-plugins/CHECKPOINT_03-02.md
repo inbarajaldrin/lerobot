@@ -29,16 +29,22 @@ After this, the stack restarted cleanly:
 
 Lerobot (our fork) works fine under numpy 1.26.4 despite pyproject.toml listing `numpy>=2` — the constraint is advisory. This avoids a v2 pixi re-pin for now; follow-up (non-blocking): add `numpy<2` to `mac-env/pixi.toml` so a fresh bootstrap doesn't reintroduce the issue.
 
-## Carried-forward known issue — `/wrist_camera` 0 Hz
+## `/wrist_camera` — fixed as part of the checkpoint
 
-After the numpy fix, `/top_camera` publishes at ~12 Hz but `/wrist_camera` stays at 0 Hz. Diagnosis:
-- `gz topic -l` lists `/wrist_camera` on the sim side.
-- `gz topic -i /wrist_camera` shows a live publisher (gz sim pid) and a live subscriber (parameter_bridge pid) — same wiring as `/top_camera`.
-- On the ROS2 side, both `best_effort` and `reliable` QoS subscribers receive 0 msgs in 2 s, while the same subscribers receive `/top_camera` fine in the same session.
+Initial probe showed `/wrist_camera` at 0 Hz (top at 12 Hz). Root cause: the sensor was attached to `camera_link`, a geometry-less URDF frame (`<link name="camera_link" />` — used purely for ROS-convention transforms). Gazebo Harmonic's Ogre2 silently refuses to create a render context for a camera sensor on a link with no `<visual>`/`<collision>`, so the sensor registered on the gz bus but never produced frames.
 
-So the sim-side sensor is registered but either (a) never renders a frame (macOS Ogre2 quirk on the wrist link attached to a moving joint) or (b) the bridge drops it silently. This is **not** a Phase 3 bug — the plugin correctly raises a descriptive `TimeoutError` with the topic name when this happens, and any working camera topic swaps in via the config dict. Diagnosis + fix is sim-stack work, tracked separately.
+Fix in `so_arm101.gazebo.xacro`: re-parented the `<gazebo reference="...">` block from `camera_link` → `usb_camera` (which has real mesh geometry), folded the URDF transform from `usb_camera → camera_link` (`xyz="0 0.0139 0" rpy="1.5708 0 1.5708"`) into the sensor `<pose>`, kept `<ignition_frame_id>camera_link</ignition_frame_id>` so downstream Image messages still carry the original frame_id. Also dropped resolution from 1280×720 → 640×480 to keep macOS Ogre2 render rate above 10 Hz and match the real RealSense wrist view.
 
-The Phase 3 plugin contract: "reads whatever cameras the config dict points at." If the config names `/wrist_camera` and it's dead, the plugin will fail loud at `async_read(timeout_ms=500)` with `TimeoutError: no new frame on '/wrist_camera' within 500ms.` — which is exactly the right failure mode for a recording pipeline that must refuse to write stale data.
+Post-fix two-camera probe (`/tmp/soarm-ws` rebuild, fresh stack):
+```
+OK  20 observations with BOTH cameras
+    wrist: (480, 640, 3) dtype=uint8
+    top:   (480, 640, 3) dtype=uint8
+    state: ['elbow_flex.pos', 'gripper.pos', 'shoulder_lift.pos',
+            'shoulder_pan.pos', 'wrist_flex.pos', 'wrist_roll.pos']
+CHECKPOINT 03-02 (dual camera): PASS
+```
+Visual check via PNG snapshots of both topics confirmed the wrist POV framing is unchanged from the pre-fix design (camera_link TF position is preserved).
 
 ## Evidence
 

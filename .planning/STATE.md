@@ -55,7 +55,8 @@ None yet — captured via `/gsd-add-todo` if they emerge.
 
 - **Real HF dataset repo_id unknown**: need the exact colleague-provided pick-and-place dataset URL before Phase 5's parity check can run. Blocks VER-01 content but not earlier phases.
 - **Second (top) camera spec**: currently 640×480 @ 30 fps. May need retune to match real dataset.
-- **`/wrist_camera` 0 Hz on ROS2 side** (sim-stack bug, not Phase 3): gz-side publisher + bridge wiring are identical to `/top_camera` but no messages arrive on the ros2 graph. Plugin handles it fail-loud via `TimeoutError`. Triage deferred — not a Phase-4 blocker unless we require both cameras for the first recording.
+<!-- /wrist_camera was fixed inline during the Phase 3 checkpoint. Root cause: SDF sensor attached to a geometry-less URDF frame; re-parented to usb_camera with pose offset. Both cameras now flow at 640x480 rgb8 through the plugin. -->
+
 - **numpy<2 pin needed in `mac-env/pixi.toml`**: `pip install -e lerobot` upgrades numpy to PyPI 2.2.6, which fails to load on this Mac due to missing Accelerate ILP64 symbols, killing Python controller spawners. Workaround applied (force-reinstall numpy<2); non-blocking follow-up to pin in pixi.toml.
 - **`Robot.send_action` no-op for record loop**: Phase 3 ships send_action returning input unchanged. Whether `lerobot-record`'s record loop tolerates this (or expects real actuation) is a Phase 4 reveal.
 

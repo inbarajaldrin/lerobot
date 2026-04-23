@@ -68,9 +68,13 @@ Full result in `CHECKPOINT_03-02.md`. Summary:
 
 `pip install -e lerobot` at the start of the session bumped numpy 1.26.4 → 2.2.6 from PyPI. The PyPI wheel is linked against macOS Accelerate's `NEWLAPACK$ILP64` symbols that don't resolve on this Mac, so every Python controller spawner died on `import numpy`. Fix: `pip install --force-reinstall --no-deps 'numpy<2'`. Lerobot works fine under 1.26.4 despite pyproject's advisory `numpy>=2`. Non-blocking follow-up: pin `numpy<2` in `mac-env/pixi.toml` so fresh bootstraps don't regress.
 
-### Known non-blocker: `/wrist_camera` 0 Hz
+### `/wrist_camera` — fixed inline
 
-After the numpy fix, `/top_camera` publishes fine but `/wrist_camera` stays at 0 Hz on the ROS2 side despite gz-side publisher + bridge wiring looking identical. Sim-stack bug, not Phase 3 scope — the plugin handles it correctly (descriptive `TimeoutError` on `async_read`). Triage deferred.
+Initial probe caught `/wrist_camera` at 0 Hz. Root cause: the SDF `<sensor>` was parented to `camera_link`, an empty URDF convention frame (`<link name="camera_link" />` — no visual/collision). Gazebo Harmonic's Ogre2 silently refuses to render a camera sensor on a geometry-less link.
+
+Fix in `vla_SO-ARM101/src/so_arm101_description/urdf/so_arm101.gazebo.xacro`: re-parent to `usb_camera` (which has mesh geometry), fold the URDF `usb_camera → camera_link` transform into the sensor `<pose>` (xyz="0 0.0139 0" rpy="1.5708 0 1.5708"), keep `ignition_frame_id=camera_link` so downstream Image frame_ids don't change. Also dropped resolution 1280×720 → 640×480 to match the real RealSense wrist view and keep macOS Ogre2 render rate ≥10 Hz.
+
+Post-fix: dual-camera checkpoint passes — `SO101ROS2Robot.get_observation()` returns both `wrist` and `top` as (480, 640, 3) uint8 at a rate suitable for recording.
 
 ## Commits
 
