@@ -356,12 +356,26 @@ class ROS2Camera(Camera):
     def _msg_to_ndarray(self, msg: Any) -> NDArray[np.uint8]:
         img = _image_msg_to_ndarray(msg, self.config.encoding)
 
+        # Drop alpha for 4-channel sources (RGBA/BGRA). lerobot's dataset
+        # schema is 3-channel; doing the strip here is cheap (single
+        # contiguous slice) and avoids forcing publishers — including
+        # GPU-pinned viewport buffers in Isaac Sim — to do the strip in
+        # render-thread callbacks where it kills frame rate.
+        if img.ndim == 3 and img.shape[2] == 4:
+            msg_encoding = (msg.encoding or "").lower()
+            if msg_encoding in {"rgba8", "rgba16"}:
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+            elif msg_encoding in {"bgra8", "bgra16"}:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            else:
+                img = img[:, :, :3]
+
         # Normalize color ordering to the requested color_mode.
         if img.ndim == 3 and img.shape[2] == 3:
             msg_encoding = (msg.encoding or "").lower()
-            if msg_encoding in {"rgb8", "rgb16"} and self.color_mode == ColorMode.BGR:
+            if msg_encoding in {"rgb8", "rgb16", "rgba8", "rgba16"} and self.color_mode == ColorMode.BGR:
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            elif msg_encoding in {"bgr8", "bgr16"} and self.color_mode == ColorMode.RGB:
+            elif msg_encoding in {"bgr8", "bgr16", "bgra8", "bgra16"} and self.color_mode == ColorMode.RGB:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         rot_flag = _CV2_ROTATION_TO_FLAG.get(self.rotation)
