@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-04-27T03:38:54.729Z",
+  "phase": "06",
+  "phase_name": "real-hardware-unification",
+  "phase_dir": ".planning/phases/06-real-hardware-unification",
+  "plan": 7,
+  "task": 7,
+  "total_tasks": 7,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "6-01: jointstatereader dual publish + topic-driven follower", "status": "done", "commit": "0944414"},
+    {"id": 2, "name": "6-02: so_arm101_bringup package (USB camera publisher + launch)", "status": "done", "commit": "c07aa2c"},
+    {"id": 3, "name": "6-03: record.sh rename + record_one_shot.sh + real-hw runbook", "status": "done", "commit": "6f4517d"},
+    {"id": 4, "name": "6-04: sim_ground_truth (gz.transport13 → /objects_poses_sim, /objects_bbox_sim) + cup containers + /drop_poses (isaac-sim-mcp parity)", "status": "done", "commit": "f485531"},
+    {"id": 5, "name": "6-05: aruco_camera_localizer topic params + /objects_bbox publisher + bbox_catalog.json", "status": "done", "commit": "afbd4d9 (in inbarajaldrin/aruco_camera_localizer@robosort, pushed)"},
+    {"id": 6, "name": "6-06: project-agnostic ROS2_MAC_SETUP.md + LEROBOT_ROS2_MAC_SETUP cross-link + ROS2_PLUGINS.md authoring guide + cascading CLAUDE.md (root + vla_SO-ARM101 + mac-env + lerobot)", "status": "done", "commit": "de40e28 + ea1fd6c9 + 1006964e + abea200"}
+  ],
+  "remaining_tasks": [
+    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "blocked", "blocking_reason": "requires USB-connected SO-ARM101 leader + follower + USB wrist camera"}
+  ],
+  "blockers": [
+    {
+      "description": "Real SO-ARM101 hardware not on dev machine",
+      "type": "human_action",
+      "workaround": "All code paths shipped and unit/static-verified; integration test deferred to a focused 30-min session when hardware arrives. Until then REAL-04 stays unchecked in REQUIREMENTS.md."
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "Plug in SO-ARM101 leader (typically /dev/ttyACM1) + follower (/dev/ttyACM0) + USB wrist camera (typically index 0)",
+      "context": "Required for 6-07 end-to-end real record + verify_parity PASS",
+      "blocking": true
+    },
+    {
+      "action": "Override --robot.cameras to single-camera config when running real-mode record (one-camera setups: --robot.cameras='{wrist: {type: ros2, topic: /wrist_camera, width: 640, height: 480, fps: 30}}')",
+      "context": "record.sh's DEFAULT_CAMERAS hardcodes 2 cameras (wrist + top). Single-cam real rigs would otherwise hang waiting for /top_camera publisher. Documented gap; ergonomic fix deliberately deferred (one-line CLI override is acceptable).",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "sim_ground_truth subscribes to Gazebo via gz.transport13 directly, NOT through ros_gz_bridge",
+      "rationale": "Live-tested ros_gz_bridge's gz.msgs.Pose_V → tf2_msgs/TFMessage conversion: silently drops pose.name and pose.id, leaving frame_id and child_frame_id empty. Translation data flows but is unidentifiable for per-object filtering. gz.transport13 preserves pose.name (verified live at ~57 Hz).",
+      "phase": "06-04"
+    },
+    {
+      "decision": "Cup drop frames are sibling top-level SDF models (`drop_red`/`drop_green`/`drop_blue`), NOT child links of the cup models",
+      "rationale": "Gazebo's Pose_V publishes child-link poses relative to parent model, but top-level models get absolute world poses. Sibling pattern mirrors Isaac Sim's wrapper-Xform-prim trick from isaac-sim-mcp@so-arm101 phase 01.",
+      "phase": "06-04"
+    },
+    {
+      "decision": "aruco_camera_localizer is auto-cloned by bootstrap.sh to /tmp (spaceless path), NOT added as a git submodule of Exploring-VLAs",
+      "rationale": "Tried `git submodule add` — hits a known git pack-index bug when the parent repo path contains spaces (this project lives under '~/Documents/Projects/untitled folder/'). Failed with 'fatal: could not open .../tmp_pack_*'. Cloning to /tmp + symlinking into the workspace is the working substitute; same user-facing experience.",
+      "phase": "06-06"
+    },
+    {
+      "decision": "so_arm101_bringup copies camera_publisher from aruco_camera_localizer into its own tree (not a runtime dep)",
+      "rationale": "Keeps the lerobot real-hw stack self-contained — same camera frames feed both the lerobot recorder and any aruco-based pose publisher (single source, multiple consumers). Adds CLI flags (--width/--height/--fps/--frame-id) the original lacked, drops aruco-specific exposure/WB clamping for dataset-recording defaults.",
+      "phase": "06-02"
+    },
+    {
+      "decision": "record.sh / record_sim.sh kept as separate-but-aliased — record_sim.sh is now a symlink to record.sh",
+      "rationale": "Renamed the wrapper to reflect dual-mode reality (sim+real) without breaking any of the existing docs/PRs/scripts that reference record_sim.sh. Symlink resolves transparently.",
+      "phase": "06-03"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "When SO-ARM101 hardware lands on desk: 30-min focused session to execute Phase 6-07 — follow `vla_SO-ARM101/docs/LEROBOT_ROS2_MAC_SETUP.md` REAL section, record 1 short episode, push to Hub, run verify_parity.py against the reference dataset, then flip REAL-04 in REQUIREMENTS.md and mark Phase 6 complete in STATE.md.",
+  "context_notes": "Phase 6 scope expanded mid-flight from 4 → 7 plans after the control_gui contract audit revealed three additional sub-plans worth of integration work (sim ground-truth publisher, aruco bbox + topic params, unified Mac setup doc). All 6 non-hardware plans landed cleanly with live-test verification at every step except 6-05 (aruco changes are syntax+JSON-validated but not live-run against a camera). Documentation got a major upgrade in the same session: 4 cascading CLAUDE.md files (project root + vla_SO-ARM101 + mac-env + lerobot) plus the new ROS2_PLUGINS.md authoring guide that bridges the previously-undocumented gap of 'how to port the so101_ros2 pattern to a different arm'. All three repos are pushed (Exploring-VLAs main, lerobot ros2-camera-on-main with new tracking, aruco_camera_localizer robosort). Working tree is clean except a runtime-generated YOLOE text-embeddings cache (.text_embeddings_*.pt) in the aruco repo that should be added to .gitignore as a separate one-line cleanup."
+}
