@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-28T06:52:00Z",
+  "timestamp": "2026-04-28T07:30:00Z",
   "phase": "06",
   "phase_name": "real-hardware-unification",
   "phase_dir": ".planning/phases/06-real-hardware-unification",
@@ -8,85 +8,131 @@
   "task": 7,
   "total_tasks": 7,
   "status": "paused",
-  "completed_tasks": [
-    {"id": 1, "name": "6-01: jointstatereader dual publish + topic-driven follower", "status": "done", "commit": "0944414"},
-    {"id": 2, "name": "6-02: so_arm101_bringup package", "status": "done", "commit": "c07aa2c"},
-    {"id": 3, "name": "6-03: record.sh rename + record_one_shot.sh + real-hw runbook", "status": "done", "commit": "6f4517d"},
-    {"id": 4, "name": "6-04: sim_ground_truth (gz.transport13) + cup containers + /drop_poses", "status": "done", "commit": "f485531"},
-    {"id": 5, "name": "6-05: aruco_camera_localizer topic params + /objects_bbox publisher", "status": "done", "commit": "afbd4d9"},
-    {"id": 6, "name": "6-06: project-agnostic ROS2_MAC_SETUP.md + ROS2_PLUGINS.md + cascading CLAUDE.md", "status": "done", "commit": "de40e28"},
-    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "in_progress", "progress": "Real-mode grasp pipeline validated 2026-04-27/28. Inline gravity-comp + cubic Hermite + 50 Hz smoothness shipped. Calibration workflow consolidated (calibrate_arm.sh + feetech_calib_audit.py + freedrive_one + recenter_one). Audit script bug fixed (12-bit sign-magnitude decoder). Gripper sync fixes (init + post-action). Real-mode grasp Z-floor spinbox + lego-collision Refresh-only. Recenter_one_to_commanded service removed (architecturally impossible per Feetech servo design — GPT confirmed). Today's commits: bc71557, 6730571, e46fa05, b1dd8cf. NEXT: vision pipeline calibration for real world + drop pipeline."}
-  ],
-  "remaining_tasks": [
-    {"id": 8, "name": "Vision pipeline calibration: validate yoloe X/Y/Z accuracy vs tape-measured ground truth on real legos", "status": "not_started"},
-    {"id": 9, "name": "Vision pipeline calibration: validate aruco marker pose accuracy on real cups (after physical markers placed)", "status": "not_started"},
-    {"id": 10, "name": "Drop pipeline: place cup ArUco markers in wrist FOV, verify /drop_poses publishes at ~1 Hz", "status": "blocked"},
-    {"id": 11, "name": "Drop pipeline: test Drop Sweep + Drop Point end-to-end on real cups (after marker placement)", "status": "not_started"},
-    {"id": 12, "name": "Pick-and-drop end-to-end: full grasp_home → grasp_move → drop_sweep cycle on real hardware", "status": "not_started"},
-    {"id": 13, "name": "REAL-04 record-acceptance: record.sh --mode=real smoke run + verify_parity.py against reference dataset", "status": "not_started"}
-  ],
-  "blockers": [
+  "last_commit": "27c508e (vla_SO-ARM101 superrepo, branch main)",
+  "completed_this_session": [
     {
-      "description": "Cup ArUco markers not in scene yet — /drop_poses stays at 0 Hz, drop motion can't be tested",
-      "type": "human_action",
-      "workaround": "Place DICT_4X4_250 markers (25mm) on top of physical cups in wrist FOV"
+      "name": "Gripper-frame rename: tcp_link -> gripper_tip; new jaw_tip URDF link; dynamic tcp_link broadcast at runtime by grasp_center_publisher",
+      "files": ["URDF, SRDF, MoveIt config, MTC node, control_gui, RViz config, launches"],
+      "verification": "All TF frames present; midpoint = tcp_link with 0.0000 mm error; /ee_pose bit-exact match"
     },
     {
-      "description": "yoloe Z bias is real but not yet measured — current Real Z-floor spinbox default 0.010m was set empirically (raw IK bound), not against tape-measured truth",
-      "type": "technical",
-      "workaround": "Place a known-thickness object (lego ~14mm) at known table-Z and compare yoloe Z output"
+      "name": "Yaw normalization fix — canonicalize yaw to [-pi/2, pi/2) so yoloe's 180-deg ambiguous PCA orientation doesn't flip wrist_roll",
+      "files": ["control_gui.py:_normalize_grasp_yaw"],
+      "verification": "Wrist motion smooth (-87 -> -82 deg, no 180-deg flip)"
+    },
+    {
+      "name": "Aruco/yoloe single-point calibration offset measured at one workspace pose",
+      "values": "(+0.0118, +0.0063, +0.0017) m — written to source AND install copies of robot_config.yaml",
+      "verification": "Sub-mm residual at calibration pose; FAILS when legos moved to other quadrants (user verified)"
+    },
+    {
+      "name": "AttachedCollisionObject link_name fix (5 sites) — switched from runtime tcp_link to URDF gripper_tip",
+      "files": ["control_gui.py: 5 attach/detach sites + _refresh_attached_pose"]
+    },
+    {
+      "name": "Retreat-between-stages bug fix — descent now seeds from validated approach joints, not stale _actual_positions",
+      "files": ["control_gui.py: start_joints param plumbed through _joint_space_collision_free_execute"]
+    },
+    {
+      "name": "Half-gap shift uses LIVE jaw_gap from gripper_joint, not closed-grasp width",
+      "files": ["control_gui.py:_compute_jaw_offset"]
+    },
+    {
+      "name": "Deterministic real-mode Z target — new 'Real lego height (mm)' spinbox, target_z = lego_h + clearance (no yoloe Z dependency)",
+      "files": ["control_gui.py: spinbox + _cmd_grasp_move real-mode branch"]
+    },
+    {
+      "name": "Two-stage concat trajectory — approach + descent dispatched as ONE 101-waypoint traj; eliminates inter-stage jerk",
+      "files": ["control_gui.py:_plan_two_stage_concat + gate-C dispatch path"]
+    },
+    {
+      "name": "UI defaults tuned: FK Speed=1.0, Grasp Duration=1.0, Real Lego Height=11.4mm, Real Z-floor=10mm",
+      "notes": "'Use fixed Real grasp angles' checkbox added; default OFF so real mode uses dynamic bbox+JAW_GAP_RATE path"
     }
   ],
-  "human_actions_pending": [
+  "next_session_priorities": [
     {
-      "action": "Place cup ArUco markers in scene for drop-motion testing",
-      "context": "Required for /drop_poses to populate. Markers should be DICT_4X4_250, 25mm size, mounted on top of each colored cup.",
-      "blocking": true
+      "priority": 1,
+      "task": "Proper aruco/yoloe calibration — replace single-point workaround",
+      "context": "calibration_offset in /tmp/aruco_camera_localizer/config/robot_config.yaml is a single-point patch that fails when legos move to other quadrants (USER VERIFIED EMPIRICALLY). User suspects the right offset to tune is elsewhere — likely camera intrinsic (FOV in yaml says 100 deg HFOV, may not match physical lens), opencv_to_camera quaternion, ee_default/camera_default fallback values, OR a hand-eye calibration that should drive these from a proper script.",
+      "where_to_look": [
+        "/tmp/aruco_camera_localizer/config/robot_config.yaml — so_arm101.camera (HFOV 100 deg, resolution 640x480), opencv_to_camera quat [0.5,-0.5,0.5,-0.5], transforms.ee_default + camera_default (used as static cam_offset_position derived at startup, but those are fallback init only)",
+        "/tmp/aruco_camera_localizer/aruco_camera_localizer/config_loader.py + localizer_bridge.py — runtime camera pose comes from /camera_pose topic (camera_pose_publisher uses TF base->camera_link from URDF), NOT from yaml fallbacks. So tuning yaml fallbacks doesn't help.",
+        "The likely real fix: (a) measure actual lens HFOV with a checkerboard, update yaml; (b) verify URDF camera_mount/usb_camera/camera_link offsets vs physical mount (may need URDF tuning if camera is mounted slightly off-spec); (c) implement proper hand-eye calibration that varies arm pose, observes a known target, and solves for the static camera-in-EE transform.",
+        "scripts/derive_marker_config.py exists for marker->object transforms (Isaac Sim USD-based). No equivalent exists for live hand-eye on real camera."
+      ],
+      "validation": "Move arm to several quadrants (pan +30, -30, +60, -60), place lego, observe yoloe-vs-/ee_pose residual at each. Should be <2 mm at all quadrants if calibration is sound."
     },
     {
-      "action": "Bring tape measure or calibrated reference object for vision-accuracy ground truth",
-      "context": "yoloe X/Y/Z accuracy can only be validated against a known reference. A printed checkerboard or a lego at known table position works.",
-      "blocking": false
+      "priority": 2,
+      "task": "Drop pipeline — not yet implemented for real mode",
+      "blockers": [
+        "Cup ArUco markers physically placed: DICT_4X4_250, 25mm size, mounted on top of each colored cup in wrist FOV"
+      ],
+      "subtasks": [
+        "Place cup ArUco markers; verify /drop_poses publishes at ~1 Hz via localize_aruco",
+        "Test Drop Sweep on real cups end-to-end",
+        "Test Drop Point real-mode services (real_drop_point, real_drop_sweep, real_drop_release)",
+        "Verify pick-and-drop full cycle: grasp_home -> grasp_move -> grasp_close -> drop_sweep -> drop_release -> grasp_home"
+      ]
+    },
+    {
+      "priority": 3,
+      "task": "Remaining motion-quality issue: jerk at trajectory START still present",
+      "context": "User: 'jerk when i click any button remains but no problem in between trajectories'. The inter-stage jerk is now fixed via concat traj. The opening jerk at goal-accept handshake is separate. Likely trajectory_shim PID stepping at first setpoint OR FollowJointTrajectory action's goal-accept overhead. Investigate trajectory_shim for warm-up/ramp behavior; consider adding a 1-2 wp soft-start prefix to trajectories."
+    },
+    {
+      "priority": 4,
+      "task": "REAL-04 record-acceptance run (the original Phase 6-07 deliverable)",
+      "context": "record.sh --mode=real smoke run + verify_parity.py against reference dataset. Was blocked on grasp pipeline correctness (now fixed) and drop pipeline (still pending #2). Once #2 is done, this can run."
+    },
+    {
+      "priority": 5,
+      "task": "Isaac Sim USD parity — port the three-frame layout (gripper_tip + jaw_tip + dynamic tcp_link) to ~/Documents/isaac-sim-mcp/ so-arm101-dt extension USD",
+      "context": "Logged in MEMORY.md. Real-world is correct; Isaac sim still on old single-frame model."
     }
   ],
-  "decisions": [
+  "current_state": {
+    "stack_mode": "real (--mode real)",
+    "follower_port": "/dev/tty.usbmodem5A680088871",
+    "ui_defaults": {
+      "fk_speed": 1.0,
+      "grasp_duration_s": 1.0,
+      "real_lego_height_mm": 11.4,
+      "real_z_floor_m": 0.010,
+      "use_fixed_real_grasp_angles": false,
+      "real_grip_close_rad": 0.18,
+      "real_grip_open_rad": 0.375
+    },
+    "frames": {
+      "gripper_tip": "static URDF link (was tcp_link pre-rename)",
+      "jaw_tip": "static URDF link, derived from STL",
+      "tcp_link": "DYNAMIC, broadcast at runtime by grasp_center_publisher (NOT in URDF)"
+    },
+    "calibration_state": {
+      "feetech_eeprom": "Calibrated via lerobot-calibrate; all 6 servos pass feetech_calib_audit.py",
+      "k_calib": "Refit at ~/.cache/so_arm101/gravity_comp/k_calib.json",
+      "yoloe_calibration_offset": "(+0.0118, +0.0063, +0.0017) m — single-point, FAILS off-quadrant"
+    }
+  },
+  "decisions_this_session": [
     {
-      "decision": "Inline gravity-comp into trajectory_shim's _publish path; remove gravity_comp_node from production launch",
-      "rationale": "IPC split caused partial-target bug, phase jitter, integrator stall. Same-thread compute eliminates all three. gravity_comp_node still ships for --calibrate mode.",
-      "phase": "06-07"
+      "decision": "tcp_link reused as DYNAMIC frame (midpoint of jaw tips) post-rename, gripper_tip became the static URDF link",
+      "rationale": "User wanted one canonical name for 'grasp center' that any agent / consumer can reference; 'tcp_link' was already used for that purpose semantically (just incorrectly attached to the fixed-jaw tip pre-rename)."
     },
     {
-      "decision": "Cubic Hermite interp at 50 Hz with zero-velocity endpoints in trajectory_shim",
-      "rationale": "Linear interp at 20 Hz gave step-discontinuous setpoints the Feetech PD treated as impulses. Hermite + zero endpoints give C1-continuous rest-to-rest motion. Measured shoulder_lift hold 2.62° → 0.04°, settle NaN → 10ms.",
-      "phase": "06-07"
+      "decision": "Dropped tcp_clear from _compute_jaw_offset for exact tcp_link centering",
+      "rationale": "GPT round-2 review: '+ tcp_clear' leaves a residual offset; the centering formula should be exactly current_jaw_gap/2. tcp_clear can be added back as a deliberate bias if needed."
     },
     {
-      "decision": "Integrator tuned to alpha=0.2, i_max=4°, deadband=0.3°, dwell=0.5s, rate=2 Hz",
-      "rationale": "Aggressive (alpha=0.4 i_max=8°) hunted on fast motions where servo couldn't reach target. Gentler tuning converges on smooth motions, doesn't wind up against unreachable targets on fast motions.",
-      "phase": "06-07"
+      "decision": "Real-mode target_z bypasses yoloe Z entirely; uses lego_height + clearance from spinbox",
+      "rationale": "User insight: ground plane at Z=0 is known, lego height is fixed physical constant, so target Z is deterministic. Removes dependency on yoloe's noisy Z estimate."
     },
     {
-      "decision": "feetech_calib_audit.py uses 12-bit sign-magnitude decode for Homing_Offset (bit 11 = sign)",
-      "rationale": "Was reading as int16; lerobot's motors_bus.py decodes sign-magnitude internally before storing JSON. Mismatch was decoder artifact, not real calibration drift. Wasted hours chasing phantom mismatches.",
-      "phase": "06-07"
-    },
-    {
-      "decision": "recenter_one_to_commanded service removed (built then removed in same session)",
-      "rationale": "GPT confirmed via Feetech protocol manual: in-place EEPROM Homing rewrite without physical motion is architecturally impossible for cable-loaded joints. Goal_Position is interpreted in post-Homing coords. Existing freedrive_one + recenter_one + lerobot-calibrate cover the calibration space.",
-      "phase": "06-07"
-    },
-    {
-      "decision": "Gripper sync requires all 6 joints in initial /joint_states message",
-      "rationale": "Old code marked _initial_sync_done on first message; jsr's first publish during bring-up sometimes omitted gripper, leaving slider stuck at 0. Now waits for full message.",
-      "phase": "06-07"
-    },
-    {
-      "decision": "Real-mode lego collision push only on explicit Refresh, not auto on every /objects_poses tick",
-      "rationale": "yoloe jitter from wrist-cam angle changes the projected centroid, firing the >3mm threshold ~1-2 Hz, causing planning-scene flicker. Cache still updates so listbox is live.",
-      "phase": "06-07"
+      "decision": "Concatenated approach+descent into single trajectory",
+      "rationale": "Inter-stage zero-velocity Hermite endpoints + goal-handshake gap created visible jerk between stages. Concat eliminates both."
     }
   ],
   "uncommitted_files": [],
-  "next_action": "Start vision-pipeline calibration: (1) run mac-env/scripts/record_motion_topics.py while wrist-cam is still or moving slowly, observe /objects_poses_real for a known lego at known table position, compute yoloe X/Y/Z error vs tape-measured truth. (2) Adjust Real Grasp Z-floor spinbox or aruco_camera_localizer config based on measured bias. (3) Place cup ArUco markers and verify /drop_poses populates. (4) Test Drop Sweep / Drop Point end-to-end. (5) Run REAL-04 record acceptance.",
-  "context_notes": "Today's session was data-driven debugging of the real-hardware grasp pipeline — measured everything via record_motion_topics.py + analyze_motion.py (now in mac-env/scripts/). 4 commits ahead of upstream e3020af. Stack runs cleanly: 6 procs (control_gui, rviz2, move_group, robot_state_publisher, ros2 launch, pixi). Real arm currently calibrated via lerobot-calibrate (post-bug-fix), all 6 EEPROM Homing values match JSON per feetech_calib_audit.py. Inline gravity-comp + cubic Hermite + tuned integrator validated. Gripper sync (start + post-action) validated. The grasp pipeline (Move to Grab) works end-to-end on real legos with the new Z-floor spinbox at 0.010m. Drop pipeline blocked only on physical ArUco marker placement on cups. Vision-accuracy validation hasn't been done empirically yet — Z-floor 0.010m was set from raw IK bound, not measured yoloe bias."
+  "next_action": "When resuming: cd to vla_SO-ARM101 dir, bring up stack with `bash mac-env/scripts/stack_start.sh --mode real --rviz follower_port:=/dev/tty.usbmodem5A680088871`, then start with priority 1 (proper aruco/yoloe calibration). Read this HANDOFF.json + lerobot/.planning/STATE.md + vla_SO-ARM101/CLAUDE.md + MEMORY.md for full context."
 }
