@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-28T01:57:52.000Z",
+  "timestamp": "2026-04-28T06:52:00Z",
   "phase": "06",
   "phase_name": "real-hardware-unification",
   "phase_dir": ".planning/phases/06-real-hardware-unification",
@@ -15,66 +15,78 @@
     {"id": 4, "name": "6-04: sim_ground_truth (gz.transport13) + cup containers + /drop_poses", "status": "done", "commit": "f485531"},
     {"id": 5, "name": "6-05: aruco_camera_localizer topic params + /objects_bbox publisher", "status": "done", "commit": "afbd4d9"},
     {"id": 6, "name": "6-06: project-agnostic ROS2_MAC_SETUP.md + ROS2_PLUGINS.md + cascading CLAUDE.md", "status": "done", "commit": "de40e28"},
-    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "in_progress", "progress": "Group A polish (A.1-A.13 + scrollable all-tabs) shipped today: yoloe IPC, trim UI, torque_reset, perception remap, calibrate UX, Freedrive (all + per-joint Recenter), shlex.quote, so_follower path revert, gripper_joint key map, ±4095 guard, real-mode gripper defaults, bbox bypass. Lerobot calibrate completed. Grasp tab Open/Close working. Grasp Move blocked on Z-floor check (1mm too low — yoloe Z calibration drift)."}
+    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "in_progress", "progress": "Real-mode grasp pipeline validated 2026-04-27/28. Inline gravity-comp + cubic Hermite + 50 Hz smoothness shipped. Calibration workflow consolidated (calibrate_arm.sh + feetech_calib_audit.py + freedrive_one + recenter_one). Audit script bug fixed (12-bit sign-magnitude decoder). Gripper sync fixes (init + post-action). Real-mode grasp Z-floor spinbox + lego-collision Refresh-only. Recenter_one_to_commanded service removed (architecturally impossible per Feetech servo design — GPT confirmed). Today's commits: bc71557, 6730571, e46fa05, b1dd8cf. NEXT: vision pipeline calibration for real world + drop pipeline."}
   ],
   "remaining_tasks": [
-    {"id": 8, "name": "Resolve real-mode grasp Z-offset calibration (Task #19 in TaskList)", "status": "not_started"},
-    {"id": 9, "name": "Verify Grasp Move end-to-end on a real lego (post Z fix)", "status": "not_started"},
-    {"id": 10, "name": "Drop motion (needs cup ArUco markers in scene)", "status": "blocked"},
-    {"id": 11, "name": "REAL-04 record-acceptance: record.sh --mode=real smoke run + verify_parity.py", "status": "not_started"}
+    {"id": 8, "name": "Vision pipeline calibration: validate yoloe X/Y/Z accuracy vs tape-measured ground truth on real legos", "status": "not_started"},
+    {"id": 9, "name": "Vision pipeline calibration: validate aruco marker pose accuracy on real cups (after physical markers placed)", "status": "not_started"},
+    {"id": 10, "name": "Drop pipeline: place cup ArUco markers in wrist FOV, verify /drop_poses publishes at ~1 Hz", "status": "blocked"},
+    {"id": 11, "name": "Drop pipeline: test Drop Sweep + Drop Point end-to-end on real cups (after marker placement)", "status": "not_started"},
+    {"id": 12, "name": "Pick-and-drop end-to-end: full grasp_home → grasp_move → drop_sweep cycle on real hardware", "status": "not_started"},
+    {"id": 13, "name": "REAL-04 record-acceptance: record.sh --mode=real smoke run + verify_parity.py against reference dataset", "status": "not_started"}
   ],
   "blockers": [
     {
-      "description": "Grasp rejected (final): too low: z=0.013m < 0.014m. yoloe-published lego Z is 1mm below the grasp pre-check floor. Real-world Z calibration hasn't been validated against yoloe readings.",
-      "type": "technical",
-      "workaround": "Add real-mode Z-offset spinbox (mirror A.12 pattern), OR validate yoloe Z empirically against table+lego_thickness, OR relax the 0.014m floor in real mode."
+      "description": "Cup ArUco markers not in scene yet — /drop_poses stays at 0 Hz, drop motion can't be tested",
+      "type": "human_action",
+      "workaround": "Place DICT_4X4_250 markers (25mm) on top of physical cups in wrist FOV"
     },
     {
-      "description": "Cup ArUco markers not in scene yet — /drop_poses stays at 0 Hz, drop motion can't be tested.",
-      "type": "human_action",
-      "workaround": "Place cup ArUco markers in the wrist FOV when ready to test drop. Not blocking the grasp work."
+      "description": "yoloe Z bias is real but not yet measured — current Real Z-floor spinbox default 0.010m was set empirically (raw IK bound), not against tape-measured truth",
+      "type": "technical",
+      "workaround": "Place a known-thickness object (lego ~14mm) at known table-Z and compare yoloe Z output"
     }
   ],
   "human_actions_pending": [
     {
       "action": "Place cup ArUco markers in scene for drop-motion testing",
-      "context": "Required for /drop_poses to populate. Can be done after the grasp Z fix lands.",
+      "context": "Required for /drop_poses to populate. Markers should be DICT_4X4_250, 25mm size, mounted on top of each colored cup.",
+      "blocking": true
+    },
+    {
+      "action": "Bring tape measure or calibrated reference object for vision-accuracy ground truth",
+      "context": "yoloe X/Y/Z accuracy can only be validated against a known reference. A printed checkerboard or a lego at known table position works.",
       "blocking": false
     }
   ],
   "decisions": [
     {
-      "decision": "Real mode bypasses bbox-driven gripper angle calculation, uses hardcoded spinbox defaults (0.375 open, 0.18 close)",
-      "rationale": "yoloe-derived bbox dimensions are noisier than sim ground truth; a single hand-tuned pair is more reliable for repeated lego grasps. Sim mode unchanged (still uses dynamic BASELINE_JAW_GAP + JAW_GAP_RATE × angle).",
-      "phase": "06-07-A.12"
+      "decision": "Inline gravity-comp into trajectory_shim's _publish path; remove gravity_comp_node from production launch",
+      "rationale": "IPC split caused partial-target bug, phase jitter, integrator stall. Same-thread compute eliminates all three. gravity_comp_node still ships for --calibrate mode.",
+      "phase": "06-07"
     },
     {
-      "decision": "Per-joint Freedrive Recenter implemented as in-process jsr services (~/freedrive_one, ~/recenter_one, ~/cancel_freedrive_one) keyed by target_joint_name ROS param",
-      "rationale": "Avoids the kill+respawn-jsr blackout from arm_trim.py for the 'fix wrist_roll calibration without restarting' use case. Live RViz mirroring throughout the operation.",
-      "phase": "06-07-A.9"
+      "decision": "Cubic Hermite interp at 50 Hz with zero-velocity endpoints in trajectory_shim",
+      "rationale": "Linear interp at 20 Hz gave step-discontinuous setpoints the Feetech PD treated as impulses. Hermite + zero endpoints give C1-continuous rest-to-rest motion. Measured shoulder_lift hold 2.62° → 0.04°, settle NaN → 10ms.",
+      "phase": "06-07"
     },
     {
-      "decision": "lerobot calibration JSON path is .../so_follower/, NOT .../so101_follower/ — empirically verified",
-      "rationale": "lerobot 0.5.2's --robot.type=so101_follower flag configures the runtime robot CLASS but the JSON saves to so_follower/ regardless. A.5 mistakenly assumed they matched; A.10 reverted.",
-      "phase": "06-07-A.10"
+      "decision": "Integrator tuned to alpha=0.2, i_max=4°, deadband=0.3°, dwell=0.5s, rate=2 Hz",
+      "rationale": "Aggressive (alpha=0.4 i_max=8°) hunted on fast motions where servo couldn't reach target. Gentler tuning converges on smooth motions, doesn't wind up against unreachable targets on fast motions.",
+      "phase": "06-07"
     },
     {
-      "decision": "URDF→lerobot JSON name map: gripper_joint → gripper",
-      "rationale": "URDF/jsr/control_gui use 'gripper_joint' (URDF link convention); lerobot JSON uses 'gripper' (canonical name). Mirrors trajectory_shim.py:64's existing inverse map.",
-      "phase": "06-07-A.10"
+      "decision": "feetech_calib_audit.py uses 12-bit sign-magnitude decode for Homing_Offset (bit 11 = sign)",
+      "rationale": "Was reading as int16; lerobot's motors_bus.py decodes sign-magnitude internally before storing JSON. Mismatch was decoder artifact, not real calibration drift. Wasted hours chasing phantom mismatches.",
+      "phase": "06-07"
     },
     {
-      "decision": "All 7 GUI tabs wrapped in scrollable Canvas+Scrollbar via _make_scrollable_tab helper",
-      "rationale": "Settings tab grew past one screen height; same pattern applied to FK/IK/Grasp/Quickstart/Real Test/RViz. Mouse-wheel events activate per-tab via <Enter>/<Leave> so cross-tab wheel doesn't stray.",
-      "phase": "06-07-A.6+UX"
+      "decision": "recenter_one_to_commanded service removed (built then removed in same session)",
+      "rationale": "GPT confirmed via Feetech protocol manual: in-place EEPROM Homing rewrite without physical motion is architecturally impossible for cable-loaded joints. Goal_Position is interpreted in post-Homing coords. Existing freedrive_one + recenter_one + lerobot-calibrate cover the calibration space.",
+      "phase": "06-07"
     },
     {
-      "decision": "recenter_one Homing_Offset guard relaxed from ±2047 to ±4095",
-      "rationale": "Original ±2047 came from a stricter Feetech datasheet interpretation (12-bit signed). Firmware empirically accepts up to ±4095 (one full encoder rotation). Tighter cap blocked legitimate big-correction recovery scenarios like reverting an over-rotated Freedrive.",
-      "phase": "06-07-A.11"
+      "decision": "Gripper sync requires all 6 joints in initial /joint_states message",
+      "rationale": "Old code marked _initial_sync_done on first message; jsr's first publish during bring-up sometimes omitted gripper, leaving slider stuck at 0. Now waits for full message.",
+      "phase": "06-07"
+    },
+    {
+      "decision": "Real-mode lego collision push only on explicit Refresh, not auto on every /objects_poses tick",
+      "rationale": "yoloe jitter from wrist-cam angle changes the projected centroid, firing the >3mm threshold ~1-2 Hz, causing planning-scene flicker. Cache still updates so listbox is live.",
+      "phase": "06-07"
     }
   ],
   "uncommitted_files": [],
-  "next_action": "Resolve grasp Z-floor calibration. Three options: (a) add real-mode Z-offset spinbox in Grasp tab mirroring A.12 gripper-defaults pattern, (b) verify yoloe Z calibration empirically against table+lego_thickness with a tape measure, (c) relax 0.014m floor check in real mode. Then click Grasp Move and verify pick succeeds. After grasp works: place cup ArUco markers, test drop motion, then run REAL-04 acceptance (record.sh --mode=real smoke + verify_parity.py).",
-  "context_notes": "Today shipped 17 commits (13 A.* atomic + 1 chore + 1 UX scroll-all-tabs + 2 small follow-ups). Group A goal was 'polish before grasp testing' — fully complete except for the deferred grasp Z calibration (Task #19 in TaskList). Stack is running real mode end-to-end (control_gui, gravity_comp, trajectory_shim, jsr, camera_publisher, localize_aruco, localize_yoloe). Lerobot calibrate completed via the wrapper UI today; JSON values fresh. yoloe consistently detecting 2 reds + 1 blue + 1-3 greens in wrist FOV. Mid-motion tracking ~5-8° lag on most joints is normal physics, not a calibration issue. The Z gap (0.013 < 0.014) is suspiciously tight — likely yoloe reports lego top-Z slightly low or the floor check itself uses a too-strict margin. Mental model: real-world calibration parameters need the same 'spinbox override for hand-tuning' treatment as gripper open/close (A.12), since yoloe-derived absolute coordinates have small systematic biases that are easier to override than to fix at the source."
+  "next_action": "Start vision-pipeline calibration: (1) run mac-env/scripts/record_motion_topics.py while wrist-cam is still or moving slowly, observe /objects_poses_real for a known lego at known table position, compute yoloe X/Y/Z error vs tape-measured truth. (2) Adjust Real Grasp Z-floor spinbox or aruco_camera_localizer config based on measured bias. (3) Place cup ArUco markers and verify /drop_poses populates. (4) Test Drop Sweep / Drop Point end-to-end. (5) Run REAL-04 record acceptance.",
+  "context_notes": "Today's session was data-driven debugging of the real-hardware grasp pipeline — measured everything via record_motion_topics.py + analyze_motion.py (now in mac-env/scripts/). 4 commits ahead of upstream e3020af. Stack runs cleanly: 6 procs (control_gui, rviz2, move_group, robot_state_publisher, ros2 launch, pixi). Real arm currently calibrated via lerobot-calibrate (post-bug-fix), all 6 EEPROM Homing values match JSON per feetech_calib_audit.py. Inline gravity-comp + cubic Hermite + tuned integrator validated. Gripper sync (start + post-action) validated. The grasp pipeline (Move to Grab) works end-to-end on real legos with the new Z-floor spinbox at 0.010m. Drop pipeline blocked only on physical ArUco marker placement on cups. Vision-accuracy validation hasn't been done empirically yet — Z-floor 0.010m was set from raw IK bound, not measured yoloe bias."
 }
