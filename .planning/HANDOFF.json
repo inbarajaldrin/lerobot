@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": "2026-04-27T03:38:54.729Z",
+  "timestamp": "2026-04-28T01:57:52.000Z",
   "phase": "06",
   "phase_name": "real-hardware-unification",
   "phase_dir": ".planning/phases/06-real-hardware-unification",
@@ -10,62 +10,71 @@
   "status": "paused",
   "completed_tasks": [
     {"id": 1, "name": "6-01: jointstatereader dual publish + topic-driven follower", "status": "done", "commit": "0944414"},
-    {"id": 2, "name": "6-02: so_arm101_bringup package (USB camera publisher + launch)", "status": "done", "commit": "c07aa2c"},
+    {"id": 2, "name": "6-02: so_arm101_bringup package", "status": "done", "commit": "c07aa2c"},
     {"id": 3, "name": "6-03: record.sh rename + record_one_shot.sh + real-hw runbook", "status": "done", "commit": "6f4517d"},
-    {"id": 4, "name": "6-04: sim_ground_truth (gz.transport13 → /objects_poses_sim, /objects_bbox_sim) + cup containers + /drop_poses (isaac-sim-mcp parity)", "status": "done", "commit": "f485531"},
-    {"id": 5, "name": "6-05: aruco_camera_localizer topic params + /objects_bbox publisher + bbox_catalog.json", "status": "done", "commit": "afbd4d9 (in inbarajaldrin/aruco_camera_localizer@robosort, pushed)"},
-    {"id": 6, "name": "6-06: project-agnostic ROS2_MAC_SETUP.md + LEROBOT_ROS2_MAC_SETUP cross-link + ROS2_PLUGINS.md authoring guide + cascading CLAUDE.md (root + vla_SO-ARM101 + mac-env + lerobot)", "status": "done", "commit": "de40e28 + ea1fd6c9 + 1006964e + abea200"}
+    {"id": 4, "name": "6-04: sim_ground_truth (gz.transport13) + cup containers + /drop_poses", "status": "done", "commit": "f485531"},
+    {"id": 5, "name": "6-05: aruco_camera_localizer topic params + /objects_bbox publisher", "status": "done", "commit": "afbd4d9"},
+    {"id": 6, "name": "6-06: project-agnostic ROS2_MAC_SETUP.md + ROS2_PLUGINS.md + cascading CLAUDE.md", "status": "done", "commit": "de40e28"},
+    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "in_progress", "progress": "Group A polish (A.1-A.13 + scrollable all-tabs) shipped today: yoloe IPC, trim UI, torque_reset, perception remap, calibrate UX, Freedrive (all + per-joint Recenter), shlex.quote, so_follower path revert, gripper_joint key map, ±4095 guard, real-mode gripper defaults, bbox bypass. Lerobot calibrate completed. Grasp tab Open/Close working. Grasp Move blocked on Z-floor check (1mm too low — yoloe Z calibration drift)."}
   ],
   "remaining_tasks": [
-    {"id": 7, "name": "6-07: end-to-end real record + verify_parity PASS", "status": "blocked", "blocking_reason": "requires USB-connected SO-ARM101 leader + follower + USB wrist camera"}
+    {"id": 8, "name": "Resolve real-mode grasp Z-offset calibration (Task #19 in TaskList)", "status": "not_started"},
+    {"id": 9, "name": "Verify Grasp Move end-to-end on a real lego (post Z fix)", "status": "not_started"},
+    {"id": 10, "name": "Drop motion (needs cup ArUco markers in scene)", "status": "blocked"},
+    {"id": 11, "name": "REAL-04 record-acceptance: record.sh --mode=real smoke run + verify_parity.py", "status": "not_started"}
   ],
   "blockers": [
     {
-      "description": "Real SO-ARM101 hardware not on dev machine",
+      "description": "Grasp rejected (final): too low: z=0.013m < 0.014m. yoloe-published lego Z is 1mm below the grasp pre-check floor. Real-world Z calibration hasn't been validated against yoloe readings.",
+      "type": "technical",
+      "workaround": "Add real-mode Z-offset spinbox (mirror A.12 pattern), OR validate yoloe Z empirically against table+lego_thickness, OR relax the 0.014m floor in real mode."
+    },
+    {
+      "description": "Cup ArUco markers not in scene yet — /drop_poses stays at 0 Hz, drop motion can't be tested.",
       "type": "human_action",
-      "workaround": "All code paths shipped and unit/static-verified; integration test deferred to a focused 30-min session when hardware arrives. Until then REAL-04 stays unchecked in REQUIREMENTS.md."
+      "workaround": "Place cup ArUco markers in the wrist FOV when ready to test drop. Not blocking the grasp work."
     }
   ],
   "human_actions_pending": [
     {
-      "action": "Plug in SO-ARM101 leader (typically /dev/ttyACM1) + follower (/dev/ttyACM0) + USB wrist camera (typically index 0)",
-      "context": "Required for 6-07 end-to-end real record + verify_parity PASS",
-      "blocking": true
-    },
-    {
-      "action": "Override --robot.cameras to single-camera config when running real-mode record (one-camera setups: --robot.cameras='{wrist: {type: ros2, topic: /wrist_camera, width: 640, height: 480, fps: 30}}')",
-      "context": "record.sh's DEFAULT_CAMERAS hardcodes 2 cameras (wrist + top). Single-cam real rigs would otherwise hang waiting for /top_camera publisher. Documented gap; ergonomic fix deliberately deferred (one-line CLI override is acceptable).",
+      "action": "Place cup ArUco markers in scene for drop-motion testing",
+      "context": "Required for /drop_poses to populate. Can be done after the grasp Z fix lands.",
       "blocking": false
     }
   ],
   "decisions": [
     {
-      "decision": "sim_ground_truth subscribes to Gazebo via gz.transport13 directly, NOT through ros_gz_bridge",
-      "rationale": "Live-tested ros_gz_bridge's gz.msgs.Pose_V → tf2_msgs/TFMessage conversion: silently drops pose.name and pose.id, leaving frame_id and child_frame_id empty. Translation data flows but is unidentifiable for per-object filtering. gz.transport13 preserves pose.name (verified live at ~57 Hz).",
-      "phase": "06-04"
+      "decision": "Real mode bypasses bbox-driven gripper angle calculation, uses hardcoded spinbox defaults (0.375 open, 0.18 close)",
+      "rationale": "yoloe-derived bbox dimensions are noisier than sim ground truth; a single hand-tuned pair is more reliable for repeated lego grasps. Sim mode unchanged (still uses dynamic BASELINE_JAW_GAP + JAW_GAP_RATE × angle).",
+      "phase": "06-07-A.12"
     },
     {
-      "decision": "Cup drop frames are sibling top-level SDF models (`drop_red`/`drop_green`/`drop_blue`), NOT child links of the cup models",
-      "rationale": "Gazebo's Pose_V publishes child-link poses relative to parent model, but top-level models get absolute world poses. Sibling pattern mirrors Isaac Sim's wrapper-Xform-prim trick from isaac-sim-mcp@so-arm101 phase 01.",
-      "phase": "06-04"
+      "decision": "Per-joint Freedrive Recenter implemented as in-process jsr services (~/freedrive_one, ~/recenter_one, ~/cancel_freedrive_one) keyed by target_joint_name ROS param",
+      "rationale": "Avoids the kill+respawn-jsr blackout from arm_trim.py for the 'fix wrist_roll calibration without restarting' use case. Live RViz mirroring throughout the operation.",
+      "phase": "06-07-A.9"
     },
     {
-      "decision": "aruco_camera_localizer is auto-cloned by bootstrap.sh to /tmp (spaceless path), NOT added as a git submodule of Exploring-VLAs",
-      "rationale": "Tried `git submodule add` — hits a known git pack-index bug when the parent repo path contains spaces (this project lives under '~/Documents/Projects/untitled folder/'). Failed with 'fatal: could not open .../tmp_pack_*'. Cloning to /tmp + symlinking into the workspace is the working substitute; same user-facing experience.",
-      "phase": "06-06"
+      "decision": "lerobot calibration JSON path is .../so_follower/, NOT .../so101_follower/ — empirically verified",
+      "rationale": "lerobot 0.5.2's --robot.type=so101_follower flag configures the runtime robot CLASS but the JSON saves to so_follower/ regardless. A.5 mistakenly assumed they matched; A.10 reverted.",
+      "phase": "06-07-A.10"
     },
     {
-      "decision": "so_arm101_bringup copies camera_publisher from aruco_camera_localizer into its own tree (not a runtime dep)",
-      "rationale": "Keeps the lerobot real-hw stack self-contained — same camera frames feed both the lerobot recorder and any aruco-based pose publisher (single source, multiple consumers). Adds CLI flags (--width/--height/--fps/--frame-id) the original lacked, drops aruco-specific exposure/WB clamping for dataset-recording defaults.",
-      "phase": "06-02"
+      "decision": "URDF→lerobot JSON name map: gripper_joint → gripper",
+      "rationale": "URDF/jsr/control_gui use 'gripper_joint' (URDF link convention); lerobot JSON uses 'gripper' (canonical name). Mirrors trajectory_shim.py:64's existing inverse map.",
+      "phase": "06-07-A.10"
     },
     {
-      "decision": "record.sh / record_sim.sh kept as separate-but-aliased — record_sim.sh is now a symlink to record.sh",
-      "rationale": "Renamed the wrapper to reflect dual-mode reality (sim+real) without breaking any of the existing docs/PRs/scripts that reference record_sim.sh. Symlink resolves transparently.",
-      "phase": "06-03"
+      "decision": "All 7 GUI tabs wrapped in scrollable Canvas+Scrollbar via _make_scrollable_tab helper",
+      "rationale": "Settings tab grew past one screen height; same pattern applied to FK/IK/Grasp/Quickstart/Real Test/RViz. Mouse-wheel events activate per-tab via <Enter>/<Leave> so cross-tab wheel doesn't stray.",
+      "phase": "06-07-A.6+UX"
+    },
+    {
+      "decision": "recenter_one Homing_Offset guard relaxed from ±2047 to ±4095",
+      "rationale": "Original ±2047 came from a stricter Feetech datasheet interpretation (12-bit signed). Firmware empirically accepts up to ±4095 (one full encoder rotation). Tighter cap blocked legitimate big-correction recovery scenarios like reverting an over-rotated Freedrive.",
+      "phase": "06-07-A.11"
     }
   ],
   "uncommitted_files": [],
-  "next_action": "When SO-ARM101 hardware lands on desk: 30-min focused session to execute Phase 6-07 — follow `vla_SO-ARM101/docs/LEROBOT_ROS2_MAC_SETUP.md` REAL section, record 1 short episode, push to Hub, run verify_parity.py against the reference dataset, then flip REAL-04 in REQUIREMENTS.md and mark Phase 6 complete in STATE.md.",
-  "context_notes": "Phase 6 scope expanded mid-flight from 4 → 7 plans after the control_gui contract audit revealed three additional sub-plans worth of integration work (sim ground-truth publisher, aruco bbox + topic params, unified Mac setup doc). All 6 non-hardware plans landed cleanly with live-test verification at every step except 6-05 (aruco changes are syntax+JSON-validated but not live-run against a camera). Documentation got a major upgrade in the same session: 4 cascading CLAUDE.md files (project root + vla_SO-ARM101 + mac-env + lerobot) plus the new ROS2_PLUGINS.md authoring guide that bridges the previously-undocumented gap of 'how to port the so101_ros2 pattern to a different arm'. All three repos are pushed (Exploring-VLAs main, lerobot ros2-camera-on-main with new tracking, aruco_camera_localizer robosort). Working tree is clean except a runtime-generated YOLOE text-embeddings cache (.text_embeddings_*.pt) in the aruco repo that should be added to .gitignore as a separate one-line cleanup."
+  "next_action": "Resolve grasp Z-floor calibration. Three options: (a) add real-mode Z-offset spinbox in Grasp tab mirroring A.12 gripper-defaults pattern, (b) verify yoloe Z calibration empirically against table+lego_thickness with a tape measure, (c) relax 0.014m floor check in real mode. Then click Grasp Move and verify pick succeeds. After grasp works: place cup ArUco markers, test drop motion, then run REAL-04 acceptance (record.sh --mode=real smoke + verify_parity.py).",
+  "context_notes": "Today shipped 17 commits (13 A.* atomic + 1 chore + 1 UX scroll-all-tabs + 2 small follow-ups). Group A goal was 'polish before grasp testing' — fully complete except for the deferred grasp Z calibration (Task #19 in TaskList). Stack is running real mode end-to-end (control_gui, gravity_comp, trajectory_shim, jsr, camera_publisher, localize_aruco, localize_yoloe). Lerobot calibrate completed via the wrapper UI today; JSON values fresh. yoloe consistently detecting 2 reds + 1 blue + 1-3 greens in wrist FOV. Mid-motion tracking ~5-8° lag on most joints is normal physics, not a calibration issue. The Z gap (0.013 < 0.014) is suspiciously tight — likely yoloe reports lego top-Z slightly low or the floor check itself uses a too-strict margin. Mental model: real-world calibration parameters need the same 'spinbox override for hand-tuning' treatment as gripper open/close (A.12), since yoloe-derived absolute coordinates have small systematic biases that are easier to override than to fix at the source."
 }
