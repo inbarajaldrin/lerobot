@@ -180,7 +180,19 @@ def load_stats(local_dir: Path) -> dict[str, dict[str, np.ndarray]] | None:
 def write_tasks(tasks: pandas.DataFrame, local_dir: Path) -> None:
     path = local_dir / DEFAULT_TASKS_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    tasks.to_parquet(path)
+    # Pin the task index dtype to PyArrow large_string. pandas' default
+    # to_parquet emits regular Arrow `string`, but pyarrow has shifted
+    # defaults across releases (23.x → 24.x) so byte-equivalent canonical
+    # datasets recorded under different envs end up with mismatched
+    # dtypes. Forcing large_string here keeps tasks.parquet reproducible
+    # across environments.
+    tasks_out = tasks.copy()
+    tasks_out.index = pd.Index(
+        tasks_out.index.to_numpy(),
+        dtype="large_string[pyarrow]",
+        name=tasks_out.index.name,
+    )
+    tasks_out.to_parquet(path)
 
 
 def load_tasks(local_dir: Path) -> pandas.DataFrame:
