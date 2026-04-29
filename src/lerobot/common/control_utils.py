@@ -18,6 +18,7 @@ from __future__ import annotations
 # Utilities
 ########################################################################################
 import logging
+import os
 import traceback
 from contextlib import nullcontext
 from copy import copy
@@ -129,9 +130,14 @@ def init_keyboard_listener():
     the program flow during execution, such as stopping recording or exiting loops. It gracefully
     handles headless environments where keyboard listening is not possible.
 
+    The listener can also be explicitly disabled via the ``LEROBOT_DISABLE_KEYBOARD`` env var,
+    even when a display is present. Useful for unattended sim recording where the script-driven
+    teleop never wants the global pynput hook (which captures arrow keys / Esc system-wide and
+    will crash the record loop if a stray keypress lands while another window has focus).
+
     Returns:
         A tuple containing:
-        - The `pynput.keyboard.Listener` instance, or `None` if in a headless environment.
+        - The `pynput.keyboard.Listener` instance, or `None` if listener is disabled.
         - A dictionary of event flags (e.g., `exit_early`) that are set by key presses.
     """
     # Allow to exit early while recording an episode or resetting the environment,
@@ -141,6 +147,13 @@ def init_keyboard_listener():
     events["exit_early"] = False
     events["rerecord_episode"] = False
     events["stop_recording"] = False
+
+    if os.environ.get("LEROBOT_DISABLE_KEYBOARD", "").strip() in ("1", "true", "True", "yes"):
+        logging.info(
+            "LEROBOT_DISABLE_KEYBOARD set — skipping global keyboard listener "
+            "(arrow keys / Esc will not interrupt the record loop)."
+        )
+        return None, events
 
     if is_headless():
         logging.warning(
