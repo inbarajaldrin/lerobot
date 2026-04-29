@@ -75,6 +75,18 @@ bash ../mac-env/scripts/record.sh --mode=real --dataset...     # real-hw record
 - **`benchmarks/`** — Performance benchmarking scripts.
 - **Root files**: `pyproject.toml` (single source of truth for deps, build, tool config), `Makefile` (E2E test targets), `uv.lock`, `CONTRIBUTING.md` & `README.md` (general information).
 
+## Dataset tooling (Mac side)
+
+For browsing / extracting / visualizing LeRobotDataset v3.0 datasets without retyping CLI flags, use the utilities in the parent project's `mac-env/scripts/`. All built locally, no notarization, no Xcode:
+
+| Tool | Purpose |
+| --- | --- |
+| `mac-env/scripts/EpisodeBrowser.swift` + `mac-env/scripts/build_episode_browser.sh` | **`ReRunEpisodeBrowser.app`** — single-file SwiftUI macOS app. Browse episodes in HF Hub repos OR local LeRobotDataset folders, open in Rerun, save individual frames at a chosen timestamp, export one or more episodes as a NEW standalone dataset (round-trip-verified). Build: `bash build_episode_browser.sh --install` to drop into `/Applications/`. Bundle id `local.lerobot.episodebrowser` is stable across rebuilds, so `@AppStorage` preferences (last-used repo_id, episode, timestamp, export list) persist. |
+| `mac-env/scripts/dump_episode_frame.py` | CLI — extract one frame at a target timestamp as a PNG. `--repo-id`, `--episode`, `--timestamp`, `--view {wrist\|top\|both}`, `--out`, `--root`. |
+| `mac-env/scripts/export_episodes.py` | CLI — extract one or more episodes (`--episodes 7,12,42`) as a standalone v3.0 dataset. Wraps `lerobot.datasets.dataset_tools.delete_episodes` on the COMPLEMENT of the keep set. Round-trip-loads to verify. Machine-readable stdout (`OUT_DIR=`, `KEPT=`, `FRAMES=`, `VERIFY=PASS\|FAIL`). |
+| `mac-env/scripts/dataset_viz.sh` | `lerobot-dataset-viz` wrapper. Accepts `<episode> [<repo_id>] [<local_root>]` positionals or `--root` flag. Auto-recovers broken viewer env (datasets / av / rerun-sdk / pyarrow). |
+| `~/transfer/sampler_local_validate.py` | Companion to `~/transfer/sampler.py`. Exercises 5 standard real/sim mixing ratios (25/75, 50/50, 75/25, 100/0, 0/100) **offline** — no HF push, no auth, persists merged splits at `~/transfer/splits/<name>/` for inspection. Verifies each split via round-trip load. Run with `--real` / `--sim` paths to point at any pair of local LeRobotDataset roots. |
+
 ## Notes
 
 - **Mypy is gradual**: strict only for `lerobot.envs`, `lerobot.configs`, `lerobot.optim`, `lerobot.model`, `lerobot.cameras`, `lerobot.motors`, `lerobot.transport`. Add type annotations when modifying these modules.
