@@ -86,6 +86,32 @@ def to_hwc_uint8_numpy(chw_float32_torch: torch.Tensor) -> np.ndarray:
     return hwc_uint8_numpy
 
 
+def _build_grid4_blueprint(camera_keys: list[str]):
+    """2x2 grid: cameras (top row) + state/action time-series (bottom row).
+
+    SO-ARM101 fork addition. Camera origins come from `dataset.meta.camera_keys`
+    so this works for any LeRobotDataset. Scalar paths match what this script
+    logs at: `state/<dim>` and `action/<dim>` (see rr.log calls below).
+    """
+    import rerun.blueprint as rrb
+
+    cam_views = []
+    for key in camera_keys:
+        leaf = key.rsplit(".", 1)[-1].replace("_", " ").strip().title()
+        cam_views.append(rrb.Spatial2DView(name=f"{leaf} Camera", origin=f"/{key}"))
+    if not cam_views:
+        return None
+    return rrb.Blueprint(
+        rrb.Grid(
+            *cam_views,
+            rrb.TimeSeriesView(name="State (joints)", contents=["+ /state/**"]),
+            rrb.TimeSeriesView(name="Action (joints)", contents=["+ /action/**"]),
+            grid_columns=2,
+        ),
+        collapse_panels=True,
+    )
+
+
 def visualize_dataset(
     dataset: LeRobotDataset,
     episode_index: int,
@@ -97,6 +123,7 @@ def visualize_dataset(
     save: bool = False,
     output_dir: Path | None = None,
     display_compressed_images: bool = False,
+    blueprint_preset: str = "grid4",
     **kwargs,
 ) -> Path | None:
     if save:
@@ -124,7 +151,14 @@ def visualize_dataset(
     import rerun as rr
 
     spawn_local_viewer = mode == "local" and not save
-    rr.init(f"{repo_id}/episode_{episode_index}", spawn=spawn_local_viewer)
+    default_blueprint = None
+    if blueprint_preset == "grid4":
+        default_blueprint = _build_grid4_blueprint(list(dataset.meta.camera_keys))
+    rr.init(
+        f"{repo_id}/episode_{episode_index}",
+        spawn=spawn_local_viewer,
+        default_blueprint=default_blueprint,
+    )
 
     # Manually call python garbage collector after `rr.init` to avoid hanging in a blocking flush
     # when iterating on a dataloader with `num_workers` > 0
@@ -283,6 +317,18 @@ def main():
         "--display-compressed-images",
         action="store_true",
         help="If set, display compressed images in Rerun instead of uncompressed ones.",
+    )
+
+    parser.add_argument(
+        "--blueprint-preset",
+        type=str,
+        default="grid4",
+        choices=["default", "grid4"],
+        help=(
+            "Viewport layout preset. 'grid4' (default): 2x2 grid with cameras on top, "
+            "state and action time-series each as a single combined plot on the bottom. "
+            "'default': upstream lerobot layout (one panel per scalar dim)."
+        ),
     )
 
     args = parser.parse_args()
