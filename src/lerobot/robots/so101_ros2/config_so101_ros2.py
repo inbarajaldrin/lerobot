@@ -68,6 +68,44 @@ class SO101ROS2RobotConfig(RobotConfig):
     # dataset holds.
     robot_type: str | None = None
 
+    # ---- Inference-time actuation (opt-in) ---------------------------------
+    # When `actuate=True`, `send_action()` actually drives the sim arm by
+    # dispatching FollowJointTrajectory action goals to ros2_control's arm +
+    # gripper controllers. When False (default — preserved for recording-time
+    # backwards compatibility), `send_action()` is a no-op (the controls
+    # owner drives the arm externally; the Robot only produces observations).
+    #
+    # Used by the canonical `lerobot-record --policy.path=...` flow and by
+    # `lerobot.async_inference.robot_client` so the same single-process
+    # pattern that ships for real hardware works in sim.
+    actuate: bool = False
+    arm_action_topic: str = "/arm_controller/follow_joint_trajectory"
+    gripper_action_topic: str = "/gripper_controller/follow_joint_trajectory"
+    # ros2_control's URDF joint name for the gripper. The dataset key is
+    # `gripper.pos`; the URDF link is `gripper_joint`. We remap on dispatch.
+    gripper_joint_urdf: str = "gripper_joint"
+    # FJT goal duration per action (sec). Tuned for sim smoothness, NOT the
+    # naive "dataset.fps tick = 33 ms" choice — see the rationale below.
+    #
+    # In sim, ros2_control's JointTrajectoryController treats each new FJT
+    # goal as a CANCEL-REPLACE of the previous trajectory: it stops the
+    # current spline and starts a fresh interpolation from current state to
+    # the new target over `time_from_start`. At 33 ms, each interpolation
+    # is so short the JTC essentially produces step-velocity changes at
+    # every goal boundary → 13× higher jerk than the training data shows.
+    #
+    # Bumping to 100 ms gives the JTC a longer interpolation curve to ramp
+    # through. Cancel-replace still happens every 33 ms (at the async
+    # client's send_action cadence), but the executed slice of each
+    # interpolation is far gentler. Real Feetech motors don't have this
+    # problem — they take a goal-position register and the motor PID smooths
+    # naturally; sim's JTC needs the longer window to mimic that smoothing.
+    action_duration_s: float = 0.1
+    # Hard-clamp commanded joint targets to URDF limits before publishing.
+    # Recommended ON to prevent a misbehaving model from tripping joint-limit
+    # safeties; warns when a clamp fires.
+    clamp_joint_limits: bool = True
+
     def __post_init__(self) -> None:
         super().__post_init__()
         if not self.joint_states_topic:

@@ -25,6 +25,7 @@ python -m lerobot.async_inference.policy_server \
 """
 
 import logging
+import os
 import pickle  # nosec
 import threading
 import time
@@ -151,6 +152,47 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         start = time.perf_counter()
         self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
         self.policy.to(self.device)
+
+        # ---- Optional Real-Time Chunking (RTC) override ----------------------
+        # Flow-matching policies (SmolVLA, Pi0, Pi0.5) support RTC, but it's
+        # off by default in saved checkpoints (rtc_config=None). Enable it at
+        # server startup via env vars without re-saving the model:
+        #   LEROBOT_RTC_ENABLED=1
+        #   LEROBOT_RTC_EXECUTION_HORIZON=10        (steps to blend, default 10)
+        #   LEROBOT_RTC_MAX_GUIDANCE_WEIGHT=10.0    (smoothness vs reactivity)
+        #   LEROBOT_RTC_PREFIX_ATTENTION_SCHEDULE=EXP   (LINEAR|EXP|ONES|ZEROS)
+        # Docs: https://huggingface.co/docs/lerobot/rtc
+        if os.environ.get("LEROBOT_RTC_ENABLED", "0") == "1":
+            try:
+                from lerobot.policies.rtc.configuration_rtc import (
+                    RTCConfig, RTCAttentionSchedule,
+                )
+                schedule_name = os.environ.get(
+                    "LEROBOT_RTC_PREFIX_ATTENTION_SCHEDULE", "EXP"
+                )
+                rtc_cfg = RTCConfig(
+                    enabled=True,
+                    execution_horizon=int(os.environ.get(
+                        "LEROBOT_RTC_EXECUTION_HORIZON", "10")),
+                    max_guidance_weight=float(os.environ.get(
+                        "LEROBOT_RTC_MAX_GUIDANCE_WEIGHT", "10.0")),
+                    prefix_attention_schedule=RTCAttentionSchedule[schedule_name],
+                )
+                if hasattr(self.policy, "config"):
+                    self.policy.config.rtc_config = rtc_cfg
+                # SmolVLA exposes init_rtc_processor() for re-initialization
+                # after the rtc_config is set on the config.
+                if hasattr(self.policy, "init_rtc_processor"):
+                    self.policy.init_rtc_processor()
+                self.logger.info(
+                    f"RTC enabled: execution_horizon={rtc_cfg.execution_horizon}, "
+                    f"max_guidance_weight={rtc_cfg.max_guidance_weight}, "
+                    f"prefix_attention_schedule={rtc_cfg.prefix_attention_schedule.name}"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"RTC requested via env but failed to enable: {e}. "
+                    "Falling back to non-RTC inference.")
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
