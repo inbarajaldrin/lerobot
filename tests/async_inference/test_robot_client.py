@@ -308,6 +308,14 @@ def test_slow_camera_preserves_dispatch_rate_and_rtc_capture_anchor(robot_client
     captures = []
     sent = []
     anchors = []
+    actual_calls = []
+    original_send_action = client.robot.send_action
+
+    def tracked_send_action(action):
+        actual_calls.append(time.perf_counter())
+        return original_send_action(action)
+
+    monkeypatch.setattr(client.robot, "send_action", tracked_send_action)
 
     def slow_camera():
         captured_step = client.latest_action
@@ -335,6 +343,9 @@ def test_slow_camera_preserves_dispatch_rate_and_rtc_capture_anchor(robot_client
     monkeypatch.setattr(client, "send_observation", simulated_reply)
     client.control_loop("slow camera test", max_duration_s=4.0)
     stats = client.control_loop_stats
+    actual_rate = (len(actual_calls) - 1) / (actual_calls[-1] - actual_calls[0])
+    assert actual_rate == pytest.approx(17.4, abs=0.5)
+    assert stats["effective_action_fps"] == pytest.approx(actual_rate, abs=0.05)
     assert len(sent) >= 10
     for observation, (capture_step, capture_time) in zip(sent, anchors, strict=True):
         assert observation.timestep == capture_step + 1
@@ -350,7 +361,11 @@ def test_slow_camera_preserves_dispatch_rate_and_rtc_capture_anchor(robot_client
         path = Path(output_dir)
         path.mkdir(parents=True, exist_ok=True)
         (path / f"camera-{round(camera_read_s * 1000)}ms.json").write_text(
-            json.dumps({"camera_read_s": camera_read_s, **stats}, indent=2) + "\n"
+            json.dumps(
+                {"camera_read_s": camera_read_s, "independent_send_action_fps": actual_rate, **stats},
+                indent=2,
+            )
+            + "\n"
         )
 
 

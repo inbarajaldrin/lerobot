@@ -127,6 +127,7 @@ class RobotClient:
         # Initialize client side variables
         self.latest_action_lock = threading.Lock()
         self.latest_action = -1
+        self._last_dispatch_time = 0.0
         self.action_chunk_size = -1
 
         self._chunk_size_threshold = config.chunk_size_threshold
@@ -381,9 +382,11 @@ class RobotClient:
                 self.latest_action = timed_action.get_timestep()
         get_end = time.perf_counter() - get_start
 
-        _performed_action = self.robot.send_action(
-            self._action_tensor_to_action_dict(timed_action.get_action())
-        )
+        action_dict = self._action_tensor_to_action_dict(timed_action.get_action())
+        # Measure the actuator call, including any wait for queue aggregation and
+        # tensor conversion before dispatch, rather than just timer wake-up.
+        self._last_dispatch_time = time.perf_counter()
+        _performed_action = self.robot.send_action(action_dict)
         if verbose:
             with self.action_queue_lock:
                 current_queue_size = self.action_queue.qsize()
@@ -521,7 +524,6 @@ class RobotClient:
             while not cancelled():
                 if finished.wait(max(0, next_tick - time.perf_counter())) or cancelled():
                     break
-                dispatched_at = time.perf_counter()
                 try:
                     # The single consumer dequeues atomically with index advancement;
                     # the receiver can merge chunks without reintroducing this step.
@@ -529,6 +531,7 @@ class RobotClient:
                 except Empty:
                     counts["empty_action_ticks"] += 1
                 else:
+                    dispatched_at = self._last_dispatch_time
                     step = self.latest_action
                     if last["first_dispatch"] is None:
                         last["first_dispatch"] = dispatched_at
