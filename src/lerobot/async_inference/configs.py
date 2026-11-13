@@ -127,6 +127,10 @@ class RobotClientConfig:
     # Network configuration
     server_address: str = field(default="localhost:8080", metadata={"help": "Server address to connect to"})
 
+    observation_timeout_s: float = field(
+        default=5.0, metadata={"help": "Observation RPC deadline; bounds worker shutdown"}
+    )
+
     # Device configuration
     policy_device: str = field(default="cpu", metadata={"help": "Device for policy inference"})
     client_device: str = field(
@@ -179,6 +183,9 @@ class RobotClientConfig:
         if self.fps <= 0:
             raise ValueError(f"fps must be positive, got {self.fps}")
 
+        if self.observation_timeout_s <= 0:
+            raise ValueError("observation_timeout_s must be positive")
+
         if self.actions_per_chunk <= 0:
             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
 
@@ -193,6 +200,7 @@ class RobotClientConfig:
         """Convert the configuration to a dictionary."""
         return {
             "server_address": self.server_address,
+            "observation_timeout_s": self.observation_timeout_s,
             "policy_type": self.policy_type,
             "pretrained_name_or_path": self.pretrained_name_or_path,
             "policy_device": self.policy_device,

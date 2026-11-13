@@ -19,7 +19,11 @@ no real hardware is accessed. Only the queue-update mechanism is verified.
 
 from __future__ import annotations
 
+import json
+import os
+import threading
 import time
+from pathlib import Path
 from queue import Queue
 
 import pytest
@@ -286,3 +290,142 @@ def test_chunk_arriving_during_dispatch_cannot_requeue_current_action(robot_clie
     robot_client.control_loop_action()
     assert robot_client.latest_action == 0
     assert [action.get_timestep() for action in robot_client.action_queue.queue] == [1, 2]
+
+
+@pytest.mark.parametrize("camera_read_s", [0.040, 0.080, 0.160])
+def test_slow_camera_preserves_dispatch_rate_and_rtc_capture_anchor(robot_client, monkeypatch, camera_read_s):
+    from lerobot.async_inference.helpers import TimedAction
+
+    client = robot_client
+    client.config.fps = 17.4
+    client.config.chunk_size_threshold = 1.0
+    client._chunk_size_threshold = 1.0
+    client.action_chunk_size = 50
+    client.start_barrier = threading.Barrier(1)
+    for action in _make_actions(time.time(), 0, 50):
+        client.action_queue.put(action)
+    original_observation = client.robot.get_observation
+    captures = []
+    sent = []
+    anchors = []
+
+    def slow_camera():
+        captured_step = client.latest_action
+        captured_at = time.time()
+        raw = original_observation()
+        captures.append((captured_step, captured_at))
+        time.sleep(camera_read_s)
+        return raw
+
+    def simulated_reply(observation):
+        sent.append(observation)
+        anchors.append(captures[-1])
+        incoming = [
+            TimedAction(
+                timestamp=observation.timestamp + i / client.config.fps,
+                timestep=observation.timestep + i,
+                action=torch.zeros(6),
+            )
+            for i in range(50)
+        ]
+        client._aggregate_action_queues(incoming, client.config.aggregate_fn)
+        return True
+
+    monkeypatch.setattr(client.robot, "get_observation", slow_camera)
+    monkeypatch.setattr(client, "send_observation", simulated_reply)
+    client.control_loop("slow camera test", max_duration_s=4.0)
+    stats = client.control_loop_stats
+    assert len(sent) >= 10
+    for observation, (capture_step, capture_time) in zip(sent, anchors, strict=True):
+        assert observation.timestep == capture_step + 1
+        assert observation.timestamp <= capture_time
+        assert capture_time - observation.timestamp < 0.03
+    assert stats["nonmonotonic_action_steps"] == 0
+    assert stats["actions_sent"] >= 67
+    assert stats["effective_action_fps"] == pytest.approx(17.4, abs=0.5)
+    assert stats["dispatch_jitter_p95_ms"] < 1000 / 17.4 / 2
+    assert not any(t.name in {"robot_action_dispatch", "robot_observations"} for t in threading.enumerate())
+    output_dir = os.getenv("LEROBOT_TIMING_PROOF_DIR")
+    if output_dir:
+        path = Path(output_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / f"camera-{round(camera_read_s * 1000)}ms.json").write_text(
+            json.dumps({"camera_read_s": camera_read_s, **stats}, indent=2) + "\n"
+        )
+
+
+def test_episode_stop_joins_camera_and_suppresses_late_observation(robot_client, monkeypatch):
+    client = robot_client
+    client.config.fps = 17.4
+    client.action_chunk_size = 50
+    client._chunk_size_threshold = 1.0
+    client.start_barrier = threading.Barrier(1)
+    for action in _make_actions(time.time(), 0, 50):
+        client.action_queue.put(action)
+    entered, release, abort = threading.Event(), threading.Event(), threading.Event()
+    calls, sent = [], []
+    raw = client.robot.get_observation()
+
+    def blocked_camera():
+        entered.set()
+        assert release.wait(2.0)
+        return dict(raw)
+
+    monkeypatch.setattr(client.robot, "get_observation", blocked_camera)
+    monkeypatch.setattr(client, "send_observation", lambda obs: sent.append(obs) or True)
+    monkeypatch.setattr(
+        client.robot, "send_action", lambda action: calls.append(time.perf_counter()) or action
+    )
+    loop = threading.Thread(target=client.control_loop, args=("pause",), kwargs={"stop_event": abort})
+    loop.start()
+    try:
+        assert entered.wait(1.0)
+        abort.set()
+        time.sleep(0.1)
+        count = len(calls)
+        time.sleep(0.15)
+        assert len(calls) == count  # dispatch stops while the camera is still blocked
+        assert loop.is_alive()  # reset is not allowed until the capture joins
+    finally:
+        release.set()
+        loop.join(timeout=2.0)
+    assert not loop.is_alive()
+    assert not sent
+    assert not any(t.name in {"robot_action_dispatch", "robot_observations"} for t in threading.enumerate())
+
+
+def test_slow_dispatch_skips_missed_ticks_without_catchup_burst(robot_client, monkeypatch):
+    client = robot_client
+    client.config.fps = 17.4
+    client.start_barrier = threading.Barrier(1)
+    client.action_chunk_size = 50
+    client._chunk_size_threshold = 0.0
+    for action in _make_actions(time.time(), 0, 50):
+        client.action_queue.put(action)
+
+    def slow_send(action):
+        time.sleep(0.15)
+        return action
+
+    monkeypatch.setattr(client.robot, "send_action", slow_send)
+    client.control_loop("slow dispatch", max_duration_s=0.65)
+    stats = client.control_loop_stats
+    assert stats["missed_action_ticks"] > 0
+    assert min(stats["action_intervals_s"]) >= 0.15
+    assert stats["nonmonotonic_action_steps"] == 0
+
+
+def test_dispatch_failure_stops_both_workers(robot_client, monkeypatch):
+    client = robot_client
+    client.start_barrier = threading.Barrier(1)
+    client.action_chunk_size = 50
+    client.action_queue.put(_make_actions(time.time(), 0, 1)[0])
+    monkeypatch.setattr(client, "_ready_to_send_observation", lambda: False)
+
+    def refuse(action):
+        raise RuntimeError("dispatch refused")
+
+    monkeypatch.setattr(client.robot, "send_action", refuse)
+    with pytest.raises(RuntimeError, match="dispatch refused"):
+        client.control_loop("failure", max_duration_s=1.0)
+    assert not any(t.name in {"robot_action_dispatch", "robot_observations"} for t in threading.enumerate())

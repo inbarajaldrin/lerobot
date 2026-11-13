@@ -1,5 +1,6 @@
 """RTC transport invariants: model-space prefix, step alignment, delay, reset."""
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -28,11 +29,12 @@ def server(enabled=True):
     s = PolicyServer(PolicyServerConfig(fps=19.4))
     s.policy = Policy(enabled)
     s.actions_per_chunk = 50
-    s.last_processed_obs = TimedObservation(timestamp=1.0, timestep=0, observation={})
+    s.last_processed_obs = TimedObservation(timestamp=time.time(), timestep=0, observation={})
     return s
 
 
-def test_normalized_tail_next_unexecuted_and_measured_delay():
+def test_normalized_tail_next_unexecuted_and_measured_delay(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: 10.0)
     s = server()
     chunk = s._get_action_chunk({})
     saved = chunk.clone()
@@ -40,10 +42,13 @@ def test_normalized_tail_next_unexecuted_and_measured_delay():
     chunk.add_(1000)
     s.last_processed_obs.timestep = 25
     s._rtc_latency_s = 0.2
+    # Cameras block while actions advance; the CURRENT capture age belongs
+    # in the delay, rather than the previous observation's age.
+    monkeypatch.setattr(time, "time", lambda: 10.08)
     s._get_action_chunk({})
     call = s.policy.calls[-1]
     assert torch.equal(call["prev_chunk_left_over"], saved[:, 25:])
-    assert call["inference_delay"] == 4
+    assert call["inference_delay"] == 6
     assert s.policy.calls[0]["prev_chunk_left_over"] is None
 
 

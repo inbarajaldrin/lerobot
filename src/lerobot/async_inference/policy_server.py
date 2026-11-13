@@ -383,15 +383,24 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             tail = None
             if previous is not None and 0 <= offset < previous.shape[1]:
                 tail = previous[:, offset:].clone()
-            delay = math.ceil(self._rtc_latency_s * self._rtc_step_rate)
-            if tail is not None:
-                delay = min(delay, tail.shape[1])
+            # Capture-start indices include actions dispatched during camera reads.
+            # Add the current observation's age to the measured prediction cost.
+            observation_age_s = max(0.0, time.time() - self.last_processed_obs.get_timestamp())
+            delay = (
+                0
+                if tail is None
+                else min(
+                    math.ceil((self._rtc_latency_s + observation_age_s) * self._rtc_step_rate),
+                    tail.shape[1],
+                )
+            )
             kwargs = {"prev_chunk_left_over": tail, "inference_delay": delay}
             self.logger.info(
-                "RTC prefix_steps=%s inference_delay=%s measured_latency_s=%.4f step_rate=%.2f",
+                "RTC prefix_steps=%s inference_delay=%s prediction_latency_s=%.4f observation_age_s=%.4f step_rate=%.2f",
                 0 if tail is None else tail.shape[1],
                 delay,
                 self._rtc_latency_s,
+                observation_age_s,
                 self._rtc_step_rate,
             )
         chunk = self.policy.predict_action_chunk(observation, **kwargs)
@@ -469,12 +478,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )
         postprocess_stops = time.perf_counter()
         postprocessing_time = postprocess_stops - start_postprocess
-        # CUDA is synchronized by the CPU action transfer above. Include preprocessing,
-        # postprocessing and observation age, since the client keeps executing meanwhile.
-        self._rtc_latency_s = max(
-            postprocess_stops - start_prepare,
-            time.time() - observation_t.get_timestamp(),
-        )
+        # CPU transfer synchronizes CUDA. The next prediction combines this
+        # remaining inference/postprocessing cost with its OWN observation age.
+        self._rtc_latency_s = postprocess_stops - start_inference
 
         self.logger.info(
             f"Observation {observation_t.get_timestep()} | "

@@ -34,13 +34,15 @@ python src/lerobot/async_inference/robot_client.py \
 """
 
 import logging
+import math
 import pickle  # nosec
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict
 from pprint import pformat
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any
 
 import draccus
@@ -211,7 +213,7 @@ class RobotClient:
                 log_prefix="[CLIENT] Observation",
                 silent=True,
             )
-            _ = self.stub.SendObservations(observation_iterator)
+            _ = self.stub.SendObservations(observation_iterator, timeout=self.config.observation_timeout_s)
             obs_timestep = obs.get_timestep()
             self.logger.debug(f"Sent observation #{obs_timestep} | ")
 
@@ -403,19 +405,25 @@ class RobotClient:
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
-    def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
+    def control_loop_observation(
+        self, task: str, verbose: bool = False, stop_event: threading.Event | None = None
+    ) -> RawObservation:
         try:
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
-            raw_observation: RawObservation = self.robot.get_observation()
-            raw_observation["task"] = task
-
+            # The robot reads joint state before blocking on its cameras. Anchor
+            # RTC to that capture start: dispatch continues while images arrive.
             with self.latest_action_lock:
                 latest_action = self.latest_action
+                capture_timestamp = time.time()
+            raw_observation: RawObservation = self.robot.get_observation()
+            raw_observation["task"] = task
+            if stop_event is not None and stop_event.is_set():
+                return raw_observation
 
             observation = TimedObservation(
-                timestamp=time.time(),  # need time.time() to compare timestamps across client and server
+                timestamp=capture_timestamp,  # wall time pairs with the capture-start action index
                 observation=raw_observation,
                 # Observation follows the last executed action. Its prediction starts
                 # at the NEXT unexecuted step, matching RTC prefix alignment.
@@ -455,30 +463,141 @@ class RobotClient:
         except Exception as e:
             self.logger.error(f"Error in observation sender: {e}")
 
-    def control_loop(self, task: str, verbose: bool = False) -> tuple[Observation, Action]:
-        """Combined function for executing actions and streaming observations"""
-        # Wait at barrier for synchronized start
+    def control_loop(
+        self,
+        task: str,
+        verbose: bool = False,
+        *,
+        stop_event: threading.Event | None = None,
+        max_duration_s: float | None = None,
+        max_actions: int | None = None,
+    ) -> tuple[Observation, Action]:
+        """Dispatch on an absolute clock while observations run independently.
+
+        Returns only after both workers have stopped, so callers can safely flush
+        queues or home between episodes. ``control_loop_stats`` contains bounded
+        dispatch traces, rate/jitter, empty ticks and missed scheduling slots.
+        Camera reads must honor the robot's timeout; observation RPCs are bounded
+        by ``observation_timeout_s``. No catch-up bursts follow a missed tick.
+        """
+        if max_duration_s is not None and max_duration_s <= 0:
+            raise ValueError("max_duration_s must be positive")
+        if max_actions is not None and max_actions <= 0:
+            raise ValueError("max_actions must be positive")
         self.start_barrier.wait()
-        self.logger.info("Control loop thread starting")
+        started = time.perf_counter()
+        deadline = started + max_duration_s if max_duration_s is not None else math.inf
+        period = self.config.environment_dt
+        finished = threading.Event()
+        errors = Queue()
+        dispatch_times = deque(maxlen=4096)
+        dispatch_steps = deque(maxlen=4096)
+        intervals = deque(maxlen=4096)
+        counts = {
+            "actions_sent": 0,
+            "empty_action_ticks": 0,
+            "missed_action_ticks": 0,
+            "nonmonotonic_action_steps": 0,
+            "observations_captured": 0,
+        }
+        last = {
+            "observation": None,
+            "action": None,
+            "first_dispatch": None,
+            "last_dispatch": None,
+            "last_step": -1,
+        }
 
-        _performed_action = None
-        _captured_observation = None
+        def cancelled():
+            return (
+                finished.is_set()
+                or not self.running
+                or (stop_event is not None and stop_event.is_set())
+                or time.perf_counter() >= deadline
+            )
 
-        while self.running:
-            control_loop_start = time.perf_counter()
-            """Control loop: (1) Performing actions, when available"""
-            if self.actions_available():
-                _performed_action = self.control_loop_action(verbose)
+        def dispatch_actions():
+            next_tick = started
+            while not cancelled():
+                if finished.wait(max(0, next_tick - time.perf_counter())) or cancelled():
+                    break
+                dispatched_at = time.perf_counter()
+                try:
+                    # The single consumer dequeues atomically with index advancement;
+                    # the receiver can merge chunks without reintroducing this step.
+                    last["action"] = self.control_loop_action(verbose)
+                except Empty:
+                    counts["empty_action_ticks"] += 1
+                else:
+                    step = self.latest_action
+                    if last["first_dispatch"] is None:
+                        last["first_dispatch"] = dispatched_at
+                    if last["last_dispatch"] is not None:
+                        intervals.append(dispatched_at - last["last_dispatch"])
+                        counts["nonmonotonic_action_steps"] += step <= last["last_step"]
+                    last["last_dispatch"] = dispatched_at
+                    last["last_step"] = step
+                    dispatch_times.append(dispatched_at - started)
+                    dispatch_steps.append(step)
+                    counts["actions_sent"] += 1
+                    if max_actions is not None and counts["actions_sent"] >= max_actions:
+                        finished.set()
+                        break
+                next_tick += period
+                now = time.perf_counter()
+                if next_tick < now:
+                    missed = math.floor((now - next_tick) / period) + 1
+                    counts["missed_action_ticks"] += missed
+                    next_tick += missed * period
 
-            """Control loop: (2) Streaming observations to the remote policy server"""
-            if self._ready_to_send_observation():
-                _captured_observation = self.control_loop_observation(task, verbose)
+        def capture_observations():
+            while not cancelled():
+                capture_started = time.perf_counter()
+                if self._ready_to_send_observation():
+                    last["observation"] = self.control_loop_observation(task, verbose, finished)
+                    counts["observations_captured"] += 1
+                finished.wait(max(0, period - (time.perf_counter() - capture_started)))
 
-            self.logger.debug(f"Control loop (ms): {(time.perf_counter() - control_loop_start) * 1000:.2f}")
-            # Dynamically adjust sleep time to maintain the desired control frequency
-            time.sleep(max(0, self.config.environment_dt - (time.perf_counter() - control_loop_start)))
+        def worker(target):
+            try:
+                target()
+            except Exception as error:
+                errors.put(error)
+                finished.set()
 
-        return _captured_observation, _performed_action
+        workers = [
+            threading.Thread(target=worker, args=(dispatch_actions,), name="robot_action_dispatch"),
+            threading.Thread(target=worker, args=(capture_observations,), name="robot_observations"),
+        ]
+        started_workers = []
+        try:
+            for thread in workers:
+                thread.start()
+                started_workers.append(thread)
+            while not cancelled():
+                finished.wait(min(0.02, max(0, deadline - time.perf_counter())))
+        finally:
+            stopped_at = time.perf_counter()
+            finished.set()
+            for thread in started_workers:
+                thread.join()
+            jitter = sorted(abs(interval - period) * 1000 for interval in intervals)
+            span = last["last_dispatch"] - last["first_dispatch"] if counts["actions_sent"] > 1 else 0
+            self.control_loop_stats = {
+                **counts,
+                "duration_s": stopped_at - started,
+                "shutdown_wait_s": time.perf_counter() - stopped_at,
+                "target_fps": self.config.fps,
+                "effective_action_fps": (counts["actions_sent"] - 1) / span if span else 0.0,
+                "dispatch_jitter_p95_ms": jitter[math.ceil(0.95 * len(jitter)) - 1] if jitter else 0.0,
+                "dispatch_jitter_max_ms": max(jitter, default=0.0),
+                "dispatch_times_s": list(dispatch_times),
+                "action_steps": list(dispatch_steps),
+                "action_intervals_s": list(intervals),
+            }
+        if not errors.empty():
+            raise errors.get()
+        return last["observation"], last["action"]
 
 
 @draccus.wrap()
@@ -501,7 +620,7 @@ def async_client(cfg: RobotClientConfig):
         action_receiver_thread.start()
 
         try:
-            # The main thread runs the control loop
+            # The main thread owns the lifetime of both control workers.
             client.control_loop(task=cfg.task)
 
         finally:
