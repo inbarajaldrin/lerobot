@@ -42,6 +42,7 @@ def test_normalized_tail_next_unexecuted_and_measured_delay(monkeypatch):
     chunk.add_(1000)
     s.last_processed_obs.timestep = 25
     s._rtc_latency_s = 0.2
+    s._observed_action_rate = 5.0  # slow observation cadence must not slow RTC clock
     # Cameras block while actions advance; the CURRENT capture age belongs
     # in the delay, rather than the previous observation's age.
     monkeypatch.setattr(time, "time", lambda: 10.08)

@@ -84,7 +84,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self._rtc_previous_chunk = None
         self._rtc_chunk_start = 0
         self._rtc_latency_s = 0.0
-        self._rtc_step_rate = config.fps
+        self._observed_action_rate = config.fps
 
         # Attributes will be set by SendPolicyInstructions
         self.device = None
@@ -114,7 +114,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             self._rtc_previous_chunk = None
             self._rtc_chunk_start = 0
             self._rtc_latency_s = 0.0
-            self._rtc_step_rate = self.config.fps
+            self._observed_action_rate = self.config.fps
             self.fps_tracker.reset()
             if self.policy is not None:
                 self.policy.reset()
@@ -384,24 +384,26 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             if previous is not None and 0 <= offset < previous.shape[1]:
                 tail = previous[:, offset:].clone()
             # Capture-start indices include actions dispatched during camera reads.
-            # Add the current observation's age to the measured prediction cost.
+            # Add current capture age to measured prediction cost. The independent
+            # dispatcher advances at config.fps, even when observations are slow.
             observation_age_s = max(0.0, time.time() - self.last_processed_obs.get_timestamp())
             delay = (
                 0
                 if tail is None
                 else min(
-                    math.ceil((self._rtc_latency_s + observation_age_s) * self._rtc_step_rate),
+                    math.ceil((self._rtc_latency_s + observation_age_s) * self.config.fps),
                     tail.shape[1],
                 )
             )
             kwargs = {"prev_chunk_left_over": tail, "inference_delay": delay}
             self.logger.info(
-                "RTC prefix_steps=%s inference_delay=%s prediction_latency_s=%.4f observation_age_s=%.4f step_rate=%.2f",
+                "RTC prefix_steps=%s inference_delay=%s prediction_latency_s=%.4f observation_age_s=%.4f dispatch_fps=%.2f observed_action_fps=%.2f",
                 0 if tail is None else tail.shape[1],
                 delay,
                 self._rtc_latency_s,
                 observation_age_s,
-                self._rtc_step_rate,
+                self.config.fps,
+                self._observed_action_rate,
             )
         chunk = self.policy.predict_action_chunk(observation, **kwargs)
         if chunk.ndim != 3:
@@ -439,7 +441,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             elapsed = observation_t.get_timestamp() - previous_obs.get_timestamp()
             steps = observation_t.get_timestep() - previous_obs.get_timestep()
             if elapsed > 0 and steps > 0:
-                self._rtc_step_rate = min(self.config.fps, steps / elapsed)
+                self._observed_action_rate = min(self.config.fps, steps / elapsed)
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
 
