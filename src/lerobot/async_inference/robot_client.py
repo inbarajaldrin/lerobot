@@ -425,7 +425,9 @@ class RobotClient:
             observation = TimedObservation(
                 timestamp=time.time(),  # need time.time() to compare timestamps across client and server
                 observation=raw_observation,
-                timestep=max(latest_action, 0),
+                # Observation follows the last executed action. Its prediction starts
+                # at the NEXT unexecuted step, matching RTC prefix alignment.
+                timestep=latest_action + 1,
             )
 
             obs_capture_time = time.perf_counter() - start_time

@@ -55,7 +55,7 @@ class PolicyServerConfig:
     port: int = field(default=8080, metadata={"help": "Port number to bind the server to"})
 
     # Timing configuration
-    fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
+    fps: float = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
     inference_latency: float = field(
         default=DEFAULT_INFERENCE_LATENCY, metadata={"help": "Target inference latency in seconds"}
     )
@@ -68,6 +68,9 @@ class PolicyServerConfig:
         """Validate configuration after initialization."""
         if self.port < 1 or self.port > 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {self.port}")
+
+        if self.fps <= 0:
+            raise ValueError(f"fps must be positive, got {self.fps}")
 
         if self.environment_dt <= 0:
             raise ValueError(f"environment_dt must be positive, got {self.environment_dt}")
@@ -135,7 +138,7 @@ class RobotClientConfig:
 
     # Control behavior configuration
     chunk_size_threshold: float = field(default=0.5, metadata={"help": "Threshold for chunk size control"})
-    fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
+    fps: float = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
 
     # Aggregate function configuration (CLI-compatible)
     aggregate_fn_name: str = field(

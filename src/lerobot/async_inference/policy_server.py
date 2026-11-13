@@ -25,6 +25,7 @@ python -m lerobot.async_inference.policy_server \
 """
 
 import logging
+import math
 import os
 import pickle  # nosec
 import threading
@@ -79,6 +80,11 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self._predicted_timesteps = set()
 
         self.last_processed_obs = None
+        self._inference_lock = threading.RLock()
+        self._rtc_previous_chunk = None
+        self._rtc_chunk_start = 0
+        self._rtc_latency_s = 0.0
+        self._rtc_step_rate = config.fps
 
         # Attributes will be set by SendPolicyInstructions
         self.device = None
@@ -99,12 +105,19 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
     def _reset_server(self) -> None:
         """Flushes server state when new client connects."""
-        # only running inference on the latest observation received by the server
-        self.shutdown_event.set()
-        self.observation_queue = Queue(maxsize=1)
-
-        with self._predicted_timesteps_lock:
-            self._predicted_timesteps = set()
+        with self._inference_lock:
+            self.shutdown_event.set()
+            self.observation_queue = Queue(maxsize=1)
+            with self._predicted_timesteps_lock:
+                self._predicted_timesteps = set()
+            self.last_processed_obs = None
+            self._rtc_previous_chunk = None
+            self._rtc_chunk_start = 0
+            self._rtc_latency_s = 0.0
+            self._rtc_step_rate = self.config.fps
+            self.fps_tracker.reset()
+            if self.policy is not None:
+                self.policy.reset()
 
     def Ready(self, request, context):  # noqa: N802
         client_id = context.peer()
@@ -172,6 +185,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                 )
                 rtc_cfg = RTCConfig(
                     enabled=True,
+                    debug=os.environ.get("LEROBOT_RTC_DEBUG", "0") == "1",
                     execution_horizon=int(os.environ.get(
                         "LEROBOT_RTC_EXECUTION_HORIZON", "10")),
                     max_guidance_weight=float(os.environ.get(
@@ -190,9 +204,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                     f"prefix_attention_schedule={rtc_cfg.prefix_attention_schedule.name}"
                 )
             except Exception as e:
-                self.logger.warning(
-                    f"RTC requested via env but failed to enable: {e}. "
-                    "Falling back to non-RTC inference.")
+                raise RuntimeError("RTC requested but could not be enabled") from e
 
         # Load preprocessor and postprocessor, overriding device to match requested device
         device_override = {"device": self.device}
@@ -261,43 +273,44 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         # Generate action based on the most recent observation and its timestep
         try:
-            getactions_starts = time.perf_counter()
-            obs = self.observation_queue.get(timeout=self.config.obs_queue_timeout)
-            self.logger.info(
-                f"Running inference for observation #{obs.get_timestep()} (must_go: {obs.must_go})"
-            )
+            with self._inference_lock:
+                getactions_starts = time.perf_counter()
+                obs = self.observation_queue.get(timeout=self.config.obs_queue_timeout)
+                self.logger.info(
+                    f"Running inference for observation #{obs.get_timestep()} (must_go: {obs.must_go})"
+                )
 
-            with self._predicted_timesteps_lock:
-                self._predicted_timesteps.add(obs.get_timestep())
+                with self._predicted_timesteps_lock:
+                    self._predicted_timesteps.add(obs.get_timestep())
 
-            start_time = time.perf_counter()
-            action_chunk = self._predict_action_chunk(obs)
-            inference_time = time.perf_counter() - start_time
+                start_time = time.perf_counter()
+                action_chunk = self._predict_action_chunk(obs)
+                inference_time = time.perf_counter() - start_time
 
-            start_time = time.perf_counter()
-            actions_bytes = pickle.dumps(action_chunk)  # nosec
-            serialize_time = time.perf_counter() - start_time
+                start_time = time.perf_counter()
+                actions_bytes = pickle.dumps(action_chunk)  # nosec
+                serialize_time = time.perf_counter() - start_time
 
-            # Create and return the action chunk
-            actions = services_pb2.Actions(data=actions_bytes)
+                # Create and return the action chunk
+                actions = services_pb2.Actions(data=actions_bytes)
 
-            self.logger.info(
-                f"Action chunk #{obs.get_timestep()} generated | "
-                f"Total time: {(inference_time + serialize_time) * 1000:.2f}ms"
-            )
+                self.logger.info(
+                    f"Action chunk #{obs.get_timestep()} generated | "
+                    f"Total time: {(inference_time + serialize_time) * 1000:.2f}ms"
+                )
 
-            self.logger.debug(
-                f"Action chunk #{obs.get_timestep()} generated | "
-                f"Inference time: {inference_time:.2f}s |"
-                f"Serialize time: {serialize_time:.2f}s |"
-                f"Total time: {inference_time + serialize_time:.2f}s"
-            )
+                self.logger.debug(
+                    f"Action chunk #{obs.get_timestep()} generated | "
+                    f"Inference time: {inference_time:.2f}s |"
+                    f"Serialize time: {serialize_time:.2f}s |"
+                    f"Total time: {inference_time + serialize_time:.2f}s"
+                )
 
-            time.sleep(
-                max(0, self.config.inference_latency - max(0, time.perf_counter() - getactions_starts))
-            )  # sleep controls inference latency
+                time.sleep(
+                    max(0, self.config.inference_latency - max(0, time.perf_counter() - getactions_starts))
+                )  # sleep controls inference latency
 
-            return actions
+                return actions
 
         except Empty:  # no observation added to queue in obs_queue_timeout
             return services_pb2.Empty()
@@ -362,12 +375,33 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         ]
 
     def _get_action_chunk(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Get an action chunk from the policy. The chunk contains only"""
-        chunk = self.policy.predict_action_chunk(observation)
+        """Generate with the unexecuted normalized prefix, aligned by action index."""
+        kwargs = {}
+        rtc = getattr(self.policy.config, "rtc_config", None)
+        step = self.last_processed_obs.get_timestep()
+        if rtc is not None and rtc.enabled:
+            previous = self._rtc_previous_chunk
+            offset = step - self._rtc_chunk_start
+            tail = None
+            if previous is not None and 0 <= offset < previous.shape[1]:
+                tail = previous[:, offset:].clone()
+            delay = math.ceil(self._rtc_latency_s * self._rtc_step_rate)
+            if tail is not None:
+                delay = min(delay, tail.shape[1])
+            kwargs = dict(prev_chunk_left_over=tail, inference_delay=delay)
+            self.logger.info(
+                "RTC prefix_steps=%s inference_delay=%s measured_latency_s=%.4f step_rate=%.2f",
+                0 if tail is None else tail.shape[1], delay,
+                self._rtc_latency_s, self._rtc_step_rate,
+            )
+        chunk = self.policy.predict_action_chunk(observation, **kwargs)
         if chunk.ndim != 3:
-            chunk = chunk.unsqueeze(0)  # adding batch dimension, now shape is (B, chunk_size, action_dim)
-
-        return chunk[:, : self.actions_per_chunk, :]
+            chunk = chunk.unsqueeze(0)
+        chunk = chunk[:, : self.actions_per_chunk, :]
+        # RTC operates in model space, before the postprocessor unnormalizes actions.
+        self._rtc_previous_chunk = chunk.detach().clone()
+        self._rtc_chunk_start = step
+        return chunk
 
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         """Predict an action chunk based on an observation.
@@ -391,6 +425,12 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         """2. Apply preprocessor"""
         start_preprocess = time.perf_counter()
         observation = self.preprocessor(observation)
+        previous_obs = self.last_processed_obs
+        if previous_obs is not None:
+            elapsed = observation_t.get_timestamp() - previous_obs.get_timestamp()
+            steps = observation_t.get_timestep() - previous_obs.get_timestep()
+            if elapsed > 0 and steps > 0:
+                self._rtc_step_rate = min(self.config.fps, steps / elapsed)
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
 
@@ -429,6 +469,12 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )
         postprocess_stops = time.perf_counter()
         postprocessing_time = postprocess_stops - start_postprocess
+        # CUDA is synchronized by the CPU action transfer above. Include preprocessing,
+        # postprocessing and observation age, since the client keeps executing meanwhile.
+        self._rtc_latency_s = max(
+            postprocess_stops - start_prepare,
+            time.time() - observation_t.get_timestamp(),
+        )
 
         self.logger.info(
             f"Observation {observation_t.get_timestep()} | "
