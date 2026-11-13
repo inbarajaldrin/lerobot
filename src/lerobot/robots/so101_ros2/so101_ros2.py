@@ -20,26 +20,9 @@ import logging
 import math
 import threading
 import time
+from contextlib import suppress
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
-
-_RAD_TO_DEG = 180.0 / math.pi
-_DEG_TO_RAD = math.pi / 180.0
-
-# URDF joint limits (radians) — must stay in sync with so_arm101.urdf and
-# control_gui.JOINT_LIMITS. Used when actuate=True to clamp action targets
-# before dispatching FJT goals (defense-in-depth: also prevents a misbehaving
-# policy from tripping ros2_control's safety stops).
-_JOINT_LIMITS_RAD: dict[str, tuple[float, float]] = {
-    "shoulder_pan":  (-1.91986, 1.91986),
-    "shoulder_lift": (-1.74533, 1.74533),
-    "elbow_flex":    (-1.69, 1.69),
-    "wrist_flex":    (-1.65806, 1.65806),
-    "wrist_roll":    (-2.74385, 2.84121),
-    "gripper":       (-0.174533, 1.74533),
-}
-_ARM_JOINTS_URDF = ["shoulder_pan", "shoulder_lift", "elbow_flex",
-                    "wrist_flex", "wrist_roll"]
 
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.cameras.ros2 import ROS2Camera
@@ -56,23 +39,37 @@ from .config_so101_ros2 import SO101ROS2RobotConfig
 
 if TYPE_CHECKING or _rclpy_available:
     import rclpy  # type: ignore
-    from rclpy.action import ActionClient  # type: ignore
+    from builtin_interfaces.msg import Duration  # type: ignore
     from rclpy.qos import qos_profile_sensor_data  # type: ignore
     from sensor_msgs.msg import JointState  # type: ignore
     from trajectory_msgs.msg import (  # type: ignore
-        JointTrajectory, JointTrajectoryPoint,
+        JointTrajectory,
+        JointTrajectoryPoint,
     )
-    from control_msgs.action import FollowJointTrajectory  # type: ignore
-    from builtin_interfaces.msg import Duration  # type: ignore
 else:
     rclpy = None  # type: ignore
-    ActionClient = None  # type: ignore
     JointState = None  # type: ignore
     JointTrajectory = None  # type: ignore
     JointTrajectoryPoint = None  # type: ignore
-    FollowJointTrajectory = None  # type: ignore
     Duration = None  # type: ignore
     qos_profile_sensor_data = None  # type: ignore
+
+_RAD_TO_DEG = 180.0 / math.pi
+_DEG_TO_RAD = math.pi / 180.0
+
+# URDF joint limits (radians) — must stay in sync with so_arm101.urdf and
+# control_gui.JOINT_LIMITS. Used when actuate=True to clamp action targets
+# before publishing trajectories (defense-in-depth: also prevents a misbehaving
+# policy from tripping ros2_control's safety stops).
+_JOINT_LIMITS_RAD: dict[str, tuple[float, float]] = {
+    "shoulder_pan": (-1.91986, 1.91986),
+    "shoulder_lift": (-1.74533, 1.74533),
+    "elbow_flex": (-1.69, 1.69),
+    "wrist_flex": (-1.65806, 1.65806),
+    "wrist_roll": (-2.74385, 2.84121),
+    "gripper": (-0.174533, 1.74533),
+}
+_ARM_JOINTS_URDF = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +90,10 @@ class SO101ROS2Robot(Robot):
             Teleoperator plugin reads that topic. This Robot class produces
             `observation` rows for `lerobot-record`.
           * `actuate=True` (opt-in for inference deployment): `send_action`
-            dispatches FollowJointTrajectory action goals to ros2_control's
+            publishes JointTrajectory targets to ros2_control's
             arm + gripper controllers. Lets `lerobot-record --policy.path=...`
             and `lerobot.async_inference.robot_client` drive the sim arm
-            with the same one-process flow used for real hardware. Joint
+            through the same Robot interface used for real hardware. Joint
             targets are deg→rad converted (when `use_degrees=True`) and
             hard-clamped to URDF limits before dispatch.
 
@@ -105,12 +102,8 @@ class SO101ROS2Robot(Robot):
         spin thread, context). That means this Robot shares one node with any
         cameras it owns — one spin thread pumps all subscriptions, and
         lifecycle is tied to whichever component disconnects last. If no
-        cameras are configured, the rclpy context stays up for the life of the
-        process (the daemon spin thread dies on interpreter exit); acceptable
-        for recording runs, revisit if we ever embed this in long-running
-        services. Intentional deviation from PLAN.md 03-02's stand-alone
-        `_ROS2Node` proposal: sharing the camera singleton is simpler and
-        avoids running two rclpy spin threads side-by-side.
+        cameras are configured, disconnect releases the shared node after its
+        state subscription and command publishers have been destroyed.
     """
 
     config_class = SO101ROS2RobotConfig
@@ -140,9 +133,10 @@ class SO101ROS2Robot(Robot):
         # Shared rclpy resources — populated on connect.
         self._node: Any = None
         self._joint_state_sub: Any = None
-        # Action clients — only constructed when actuate=True (inference path).
-        self._arm_action_client: Any = None
-        self._gripper_action_client: Any = None
+        # Streaming publishers exist only for inference. No per-tick action
+        # goals, status subscriptions or result futures accumulate across runs.
+        self._arm_command_pub: Any = None
+        self._gripper_command_pub: Any = None
 
         # Latest remapped {canonical_joint: position}. Updated from the
         # background spin thread; protected by _state_lock.
@@ -206,20 +200,25 @@ class SO101ROS2Robot(Robot):
             qos_profile_sensor_data,
         )
 
-        # Inference-time actuation: bring up FollowJointTrajectory action
-        # clients for arm + gripper. Only created when actuate=True so the
-        # default recording path stays as it was (no idle action clients
-        # holding ROS resources).
+        # JTC's topic interface consumes the same positions-only trajectory
+        # as an FJT goal, without creating retained goal/result/status history.
+        # Keep discrete, result-monitored moves (homing) in their FJT owner.
         if self.config.actuate:
-            self._arm_action_client = ActionClient(
-                self._node, FollowJointTrajectory, self.config.arm_action_topic,
+            self._arm_command_pub = self._node.create_publisher(
+                JointTrajectory,
+                self.config.arm_command_topic,
+                1,
             )
-            self._gripper_action_client = ActionClient(
-                self._node, FollowJointTrajectory, self.config.gripper_action_topic,
+            self._gripper_command_pub = self._node.create_publisher(
+                JointTrajectory,
+                self.config.gripper_command_topic,
+                1,
             )
             logger.info(
-                "%s: actuate=True — FJT action clients on %s + %s",
-                self, self.config.arm_action_topic, self.config.gripper_action_topic,
+                "%s: actuate=True — trajectory publishers on %s + %s",
+                self,
+                self.config.arm_command_topic,
+                self.config.gripper_command_topic,
             )
 
         # Cameras bring up their own subscriptions on the same shared node.
@@ -249,8 +248,7 @@ class SO101ROS2Robot(Robot):
             time.sleep(0.05)
 
         self._is_connected = True
-        logger.info("%s connected. First /joint_states keys: %s",
-                    self, sorted(self._latest_state or {}))
+        logger.info("%s connected. First /joint_states keys: %s", self, sorted(self._latest_state or {}))
 
     def _on_joint_state(self, msg: Any) -> None:
         """Spin-thread callback. Remaps names via cfg.joint_name_map, converts
@@ -273,9 +271,7 @@ class SO101ROS2Robot(Robot):
         with self._state_lock:
             state = self._latest_state
         if state is None:
-            raise DeviceNotConnectedError(
-                f"{self}: no /joint_states received yet (post-connect race)."
-            )
+            raise DeviceNotConnectedError(f"{self}: no /joint_states received yet (post-connect race).")
 
         # Enforce canonical key order + fail loud on missing joints.
         obs: dict[str, Any] = {}
@@ -303,10 +299,10 @@ class SO101ROS2Robot(Robot):
             own topic; this method only exists so `lerobot-record` doesn't
             error.
           * `actuate=True` — inference deployment: convert the action dict
-            (`<joint>.pos` keys, degrees if `use_degrees=True`) into FJT
-            action goals for `/arm_controller` + `/gripper_controller`.
-            Hard-clamps to URDF limits, fire-and-forgets the action goals
-            (we don't await result — next tick supersedes), and returns the
+            (`<joint>.pos` keys, degrees if `use_degrees=True`) into topic
+            trajectories for `/arm_controller` + `/gripper_controller`.
+            Hard-clamps to URDF limits, publishes one waypoint per controller
+            (the next tick replaces the active trajectory), and returns the
             *clamped* action so callers see what was actually commanded.
         """
         if not self.config.actuate:
@@ -323,7 +319,9 @@ class SO101ROS2Robot(Robot):
                 except (TypeError, ValueError):
                     logger.warning(
                         "%s: send_action: ignoring non-numeric value for %r: %r",
-                        self, jname, val,
+                        self,
+                        jname,
+                        val,
                     )
 
         # deg → rad if dataset feature units are degrees (default for parity
@@ -339,15 +337,19 @@ class SO101ROS2Robot(Robot):
                 if v < lo or v > hi:
                     logger.warning(
                         "%s: clamping %s: %.3f → [%.3f, %.3f]",
-                        self, j, v, lo, hi,
+                        self,
+                        j,
+                        v,
+                        lo,
+                        hi,
                     )
                 clamped[j] = max(lo, min(hi, v))
         else:
             clamped = dict(rad_goal)
 
-        # Build + dispatch FJT goals. Arm and gripper go to separate
-        # controllers; both fire-and-forget so this method returns quickly
-        # (~ms) and doesn't gate the inference loop.
+        # Both controllers receive the same joint order, positions and duration
+        # as a one-point FJT trajectory. Depth-one publisher history bounds
+        # retained commands; JTC replaces its active trajectory on receipt.
         secs = int(self.config.action_duration_s)
         nsecs = int((self.config.action_duration_s - secs) * 1e9)
         dur = Duration(sec=secs, nanosec=nsecs)
@@ -360,15 +362,8 @@ class SO101ROS2Robot(Robot):
             pt.positions = arm_pos
             pt.time_from_start = dur
             arm_traj.points.append(pt)
-            arm_goal_msg = FollowJointTrajectory.Goal()
-            arm_goal_msg.trajectory = arm_traj
-            if (self._arm_action_client is not None
-                    and self._arm_action_client.server_is_ready()):
-                self._arm_action_client.send_goal_async(arm_goal_msg)
-            elif self._arm_action_client is not None:
-                logger.debug(
-                    "%s: arm action server not ready; dropping this tick", self,
-                )
+            if self._arm_command_pub is not None:
+                self._arm_command_pub.publish(arm_traj)
 
         if "gripper" in clamped:
             grip_traj = JointTrajectory()
@@ -377,11 +372,8 @@ class SO101ROS2Robot(Robot):
             gpt.positions = [clamped["gripper"]]
             gpt.time_from_start = dur
             grip_traj.points.append(gpt)
-            grip_goal_msg = FollowJointTrajectory.Goal()
-            grip_goal_msg.trajectory = grip_traj
-            if (self._gripper_action_client is not None
-                    and self._gripper_action_client.server_is_ready()):
-                self._gripper_action_client.send_goal_async(grip_goal_msg)
+            if self._gripper_command_pub is not None:
+                self._gripper_command_pub.publish(grip_traj)
 
         # Return the (possibly clamped) action in the same key shape the
         # caller sent. Convert clamped rad → deg if input was in degrees.
@@ -399,25 +391,19 @@ class SO101ROS2Robot(Robot):
 
     def _drop_subscription(self) -> None:
         if self._joint_state_sub is not None and self._node is not None:
-            try:
+            with suppress(Exception):
                 self._node.destroy_subscription(self._joint_state_sub)
-            except Exception:  # nosec B110 — best-effort cleanup
-                pass
         self._joint_state_sub = None
 
     def disconnect(self) -> None:
         if not self._is_connected and self._joint_state_sub is None:
             return
         self._drop_subscription()
-        # Drop action clients (they hold rcl handles).
-        for ac_attr in ("_arm_action_client", "_gripper_action_client"):
-            ac = getattr(self, ac_attr, None)
-            if ac is not None:
-                try:
-                    ac.destroy()
-                except Exception:  # nosec B110 — best-effort cleanup
-                    pass
-                setattr(self, ac_attr, None)
+        for pub_attr in ("_arm_command_pub", "_gripper_command_pub"):
+            publisher = getattr(self, pub_attr, None)
+            if publisher is not None and self._node is not None:
+                self._node.destroy_publisher(publisher)
+            setattr(self, pub_attr, None)
         for cam in self.cameras.values():
             try:
                 cam.disconnect()
