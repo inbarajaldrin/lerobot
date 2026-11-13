@@ -7,6 +7,7 @@
 import multiprocessing
 import os
 import pickle  # nosec
+import struct
 import time
 import traceback
 from contextlib import suppress
@@ -37,6 +38,15 @@ def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, s
     os.environ["LEROBOT_ROS2_NODE_NAME"] = f"lerobot_observations_{os.getpid()}"
     robot = None
     channel = None
+    latest_cursor = [-1, 0]
+
+    def drain_cursor():
+        while cursor.poll(0):
+            packet = os.read(cursor.fileno(), 16)
+            if not packet:
+                raise EOFError("Action cursor pipe closed")
+            latest_cursor[:] = struct.unpack("!qq", packet)
+
     try:
         robot = make_robot_from_config(robot_config)
         robot.connect()
@@ -48,9 +58,9 @@ def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, s
             task = connection.recv()
             if task is None:
                 break
-            with cursor.get_lock():
-                step = cursor[0] + 1
-                timestamp = time.time()
+            drain_cursor()
+            step = latest_cursor[0] + 1
+            timestamp = time.time()
             started = time.perf_counter()
             raw = robot.get_observation()
             raw["task"] = task
@@ -61,8 +71,8 @@ def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, s
                     )
                 )
                 continue
-            with cursor.get_lock():
-                force = must_go.is_set() and cursor[1] == 0
+            drain_cursor()
+            force = must_go.is_set() and latest_cursor[1] == 0
             observation = TimedObservation(timestamp=timestamp, timestep=step, observation=raw, must_go=force)
             payload = pickle.dumps(observation, protocol=pickle.HIGHEST_PROTOCOL)  # nosec
             sent = False
@@ -84,6 +94,7 @@ def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, s
             channel.close()
         if robot is not None:
             robot.disconnect()
+        cursor.close()
         connection.close()
 
 
@@ -97,8 +108,11 @@ class ObservationProcess:
     """
 
     def __init__(self, robot_config, timeout_s=5.0, startup_timeout_s=30.0, server_address=None):
+        if os.name != "posix":
+            raise ValueError("Isolated observation capture requires POSIX pipes")
         context = multiprocessing.get_context("spawn")
-        self.cursor = context.Array("q", [-1, 0])
+        cursor_reader, self._cursor_writer = context.Pipe(duplex=False)
+        os.set_blocking(self._cursor_writer.fileno(), False)
         self.must_go = context.Event()
         self.must_go.set()
         self.cancel_capture = context.Event()
@@ -108,7 +122,7 @@ class ObservationProcess:
             args=(
                 child,
                 robot_config,
-                self.cursor,
+                cursor_reader,
                 self.must_go,
                 self.cancel_capture,
                 server_address,
@@ -120,6 +134,7 @@ class ObservationProcess:
         self.timeout_s = timeout_s
         self.process.start()
         child.close()
+        cursor_reader.close()
         try:
             if not self.connection.poll(startup_timeout_s):
                 raise TimeoutError("Observation process did not become ready")
@@ -132,9 +147,14 @@ class ObservationProcess:
             raise
 
     def update_cursor(self, latest_action, queue_size):
-        with self.cursor.get_lock():
-            self.cursor[0] = latest_action
-            self.cursor[1] = queue_size
+        # One atomic 16-byte POSIX write: the dispatch thread never waits for
+        # a lower-priority camera process to release a shared-memory mutex.
+        try:
+            os.write(self._cursor_writer.fileno(), struct.pack("!qq", latest_action, queue_size))
+        except BlockingIOError as error:
+            raise RuntimeError(
+                "Observation cursor buffer is full; capture is not consuming updates"
+            ) from error
 
     def capture(self, task):
         self.connection.send(task)
@@ -163,4 +183,5 @@ class ObservationProcess:
         if self.process.is_alive():
             self.process.kill()
             self.process.join()
+        self._cursor_writer.close()
         self.connection.close()

@@ -558,6 +558,17 @@ class RobotClient:
             self._observation_process.resume()
             with self.action_queue_lock, self.latest_action_lock:
                 self._observation_process.update_cursor(self.latest_action, self.action_queue.qsize())
+        # Imported Torch/ROS graphs otherwise make full cyclic collections hold
+        # the GIL for hundreds of milliseconds. Keep that stable baseline out of
+        # active-episode collections; new cycles still collect normally. Restore
+        # ownership after both workers join, before an episode can be reset.
+        # A caller-owned permanent generation stays frozen; extend that baseline
+        # rather than unfreezing objects belonging to another component.
+        freeze_gc_baseline = self.config.dispatch_fifo_priority > 0
+        owns_gc_freeze = freeze_gc_baseline and gc.get_freeze_count() == 0
+        if freeze_gc_baseline:
+            gc.collect()
+            gc.freeze()
         started = time.perf_counter()
         deadline = started + max_duration_s if max_duration_s is not None else math.inf
         period = self.config.environment_dt
@@ -578,9 +589,11 @@ class RobotClient:
                 gc_started[0] = (now, info["generation"])
             elif gc_started[0] is not None:
                 began, generation = gc_started[0]
-                gc_events.append(
-                    {"time_s": began - started, "duration_ms": 1000 * (now - began), "generation": generation}
-                )
+                duration_ms = 1000 * (now - began)
+                if generation == 2 or duration_ms >= 1:
+                    gc_events.append(
+                        {"time_s": began - started, "duration_ms": duration_ms, "generation": generation}
+                    )
                 gc_started[0] = None
 
         counts = {
@@ -684,6 +697,8 @@ class RobotClient:
             for thread in started_workers:
                 thread.join()
             gc.callbacks.remove(gc_trace)
+            if owns_gc_freeze:
+                gc.unfreeze()
             jitter = sorted(abs(interval - period) * 1000 for interval in intervals)
             span = last["last_dispatch"] - last["first_dispatch"] if counts["actions_sent"] > 1 else 0
             self.control_loop_stats = {
@@ -693,6 +708,7 @@ class RobotClient:
                 "target_fps": self.config.fps,
                 "dispatch_scheduler": dispatch_scheduler,
                 "garbage_collections": list(gc_events),
+                "gc_baseline_frozen": freeze_gc_baseline,
                 "observation_process_pid": self._observation_process.process.pid
                 if self._observation_process
                 else None,

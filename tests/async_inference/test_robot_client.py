@@ -652,3 +652,59 @@ def test_cancelled_process_capture_suppresses_pending_observation():
         thread.join(timeout=2)
         source.close()
     assert source.process.exitcode == 0
+
+
+def test_cursor_publisher_is_nonblocking_and_refuses_backpressure():
+    from lerobot.async_inference.observation_process import ObservationProcess
+
+    source = ObservationProcess(SlowObservationRobotConfig(read_s=0.01))
+    try:
+        assert not os.get_blocking(source._cursor_writer.fileno())
+        # No capture requests: the reader is intentionally idle. Filling its
+        # bounded cursor buffer must refuse instead of blocking the timer.
+        with pytest.raises(RuntimeError, match="buffer is full"):
+            for index in range(100000):
+                source.update_cursor(index, 50)
+    finally:
+        source.close()
+    assert source.process.exitcode == 0
+
+
+@pytest.mark.parametrize("previous_frozen", [0, 375])
+def test_realtime_loop_preserves_gc_ownership_after_error(robot_client, monkeypatch, previous_frozen):
+    import gc
+
+    from lerobot.async_inference import robot_client as module
+
+    frozen = [previous_frozen]
+    calls = []
+    monkeypatch.setattr(gc, "get_freeze_count", lambda: frozen[0])
+
+    def freeze():
+        frozen[0] += 100
+        calls.append("freeze")
+
+    def unfreeze():
+        frozen[0] = 0
+        calls.append("unfreeze")
+
+    monkeypatch.setattr(gc, "freeze", freeze)
+    monkeypatch.setattr(gc, "unfreeze", unfreeze)
+    monkeypatch.setattr(module, "_configure_dispatch_thread", lambda config: {})
+    robot_client.config.dispatch_fifo_priority = 10
+    robot_client.start_barrier = threading.Barrier(1)
+    robot_client._aggregate_action_queues(_make_actions(time.time(), 0, 5))
+    monkeypatch.setattr(robot_client, "_ready_to_send_observation", lambda: False)
+    seen = []
+
+    def failing_action(action):
+        seen.append(gc.get_freeze_count())
+        raise RuntimeError("actuator failed")
+
+    monkeypatch.setattr(robot_client.robot, "send_action", failing_action)
+    with pytest.raises(RuntimeError, match="actuator failed"):
+        robot_client.control_loop("test", max_duration_s=1)
+    assert seen and seen[0] > 0
+    assert gc.get_freeze_count() == (previous_frozen + 100 if previous_frozen else 0)
+    assert calls == (["freeze"] if previous_frozen else ["freeze", "unfreeze"])
+    assert robot_client.control_loop_stats["gc_baseline_frozen"]
