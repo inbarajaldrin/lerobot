@@ -708,3 +708,43 @@ def test_realtime_loop_preserves_gc_ownership_after_error(robot_client, monkeypa
     assert gc.get_freeze_count() == (previous_frozen + 100 if previous_frozen else 0)
     assert calls == (["freeze"] if previous_frozen else ["freeze", "unfreeze"])
     assert robot_client.control_loop_stats["gc_baseline_frozen"]
+
+
+def test_cancellation_during_encoding_does_not_start_rpc(monkeypatch):
+    from types import SimpleNamespace
+
+    from lerobot.async_inference import observation_process as module
+
+    cancel = threading.Event()
+    messages = []
+    tasks = iter(["cancel while encoding", None])
+    rpc_calls = []
+    disconnected = []
+    connection = SimpleNamespace(recv=lambda: next(tasks), send=messages.append, close=lambda: None)
+    robot = SimpleNamespace(
+        connect=lambda: None,
+        get_observation=lambda: {"state": 1},
+        disconnect=lambda: disconnected.append(True),
+    )
+    cursor = SimpleNamespace(poll=lambda timeout: False, close=lambda: None)
+    channel = SimpleNamespace(close=lambda: None)
+    original_encode = module.pickle.dumps
+
+    def encode(observation, protocol):
+        payload = original_encode(observation, protocol=protocol)
+        cancel.set()
+        return payload
+
+    monkeypatch.setattr(module, "make_robot_from_config", lambda config: robot)
+    monkeypatch.setattr(module, "map_robot_keys_to_lerobot_features", lambda robot: {})
+    monkeypatch.setattr(module.pickle, "dumps", encode)
+    monkeypatch.setattr(module.grpc, "insecure_channel", lambda *args: channel)
+    monkeypatch.setattr(
+        module.services_pb2_grpc,
+        "AsyncInferenceStub",
+        lambda channel: SimpleNamespace(SendObservations=lambda *args, **kwargs: rpc_calls.append(True)),
+    )
+    module._capture_worker(connection, None, cursor, threading.Event(), cancel, "fake:1", 1)
+    assert messages[-1].cancelled and messages[-1].payload is None
+    assert not messages[-1].sent and not rpc_calls
+    assert disconnected == [True]

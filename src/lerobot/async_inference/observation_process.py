@@ -75,6 +75,15 @@ def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, s
             force = must_go.is_set() and latest_cursor[1] == 0
             observation = TimedObservation(timestamp=timestamp, timestep=step, observation=raw, must_go=force)
             payload = pickle.dumps(observation, protocol=pickle.HIGHEST_PROTOCOL)  # nosec
+            # Cancellation may arrive while a large image payload is encoded.
+            # Do not start a fresh RPC after that work has been cancelled.
+            if cancel_capture.is_set():
+                connection.send(
+                    CapturedObservation(
+                        step, timestamp, False, None, time.perf_counter() - started, cancelled=True
+                    )
+                )
+                continue
             sent = False
             if channel is not None:
                 chunks = send_bytes_in_chunks(payload, services_pb2.Observation, silent=True)
