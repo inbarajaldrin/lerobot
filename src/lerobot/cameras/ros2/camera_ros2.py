@@ -246,7 +246,9 @@ class ROS2Camera(Camera):
             if cls._stop_event is not None:
                 cls._stop_event.set()
             if cls._spin_thread is not None and cls._spin_thread.is_alive():
-                cls._spin_thread.join(timeout=1.0)
+                # A delayed spin thread still owns native rcl handles. Never
+                # destroy its node/context until it has actually exited.
+                cls._spin_thread.join()
                 cls._spin_thread = None
             if cls._rclpy_node is not None:
                 try:
