@@ -178,18 +178,16 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         if os.environ.get("LEROBOT_RTC_ENABLED", "0") == "1":
             try:
                 from lerobot.policies.rtc.configuration_rtc import (
-                    RTCConfig, RTCAttentionSchedule,
+                    RTCAttentionSchedule,
+                    RTCConfig,
                 )
-                schedule_name = os.environ.get(
-                    "LEROBOT_RTC_PREFIX_ATTENTION_SCHEDULE", "EXP"
-                )
+
+                schedule_name = os.environ.get("LEROBOT_RTC_PREFIX_ATTENTION_SCHEDULE", "EXP")
                 rtc_cfg = RTCConfig(
                     enabled=True,
                     debug=os.environ.get("LEROBOT_RTC_DEBUG", "0") == "1",
-                    execution_horizon=int(os.environ.get(
-                        "LEROBOT_RTC_EXECUTION_HORIZON", "10")),
-                    max_guidance_weight=float(os.environ.get(
-                        "LEROBOT_RTC_MAX_GUIDANCE_WEIGHT", "10.0")),
+                    execution_horizon=int(os.environ.get("LEROBOT_RTC_EXECUTION_HORIZON", "10")),
+                    max_guidance_weight=float(os.environ.get("LEROBOT_RTC_MAX_GUIDANCE_WEIGHT", "10.0")),
                     prefix_attention_schedule=RTCAttentionSchedule[schedule_name],
                 )
                 if hasattr(self.policy, "config"):
@@ -388,11 +386,13 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             delay = math.ceil(self._rtc_latency_s * self._rtc_step_rate)
             if tail is not None:
                 delay = min(delay, tail.shape[1])
-            kwargs = dict(prev_chunk_left_over=tail, inference_delay=delay)
+            kwargs = {"prev_chunk_left_over": tail, "inference_delay": delay}
             self.logger.info(
                 "RTC prefix_steps=%s inference_delay=%s measured_latency_s=%.4f step_rate=%.2f",
-                0 if tail is None else tail.shape[1], delay,
-                self._rtc_latency_s, self._rtc_step_rate,
+                0 if tail is None else tail.shape[1],
+                delay,
+                self._rtc_latency_s,
+                self._rtc_step_rate,
             )
         chunk = self.policy.predict_action_chunk(observation, **kwargs)
         if chunk.ndim != 3:

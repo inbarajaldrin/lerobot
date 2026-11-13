@@ -49,6 +49,7 @@ import torch
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
+
 # Fork addition: ROS2-backed camera + so101_ros2 plugin discovery. Same
 # pattern as lerobot/scripts/{lerobot_record.py, lerobot_teleoperate.py} —
 # explicit imports register the plugins via @register_subclass so
@@ -61,8 +62,8 @@ from lerobot.robots import (  # noqa: F401
     koch_follower,
     make_robot_from_config,
     omx_follower,
-    so_follower,
     so101_ros2,
+    so_follower,
 )
 from lerobot.transport import (
     services_pb2,  # type: ignore
