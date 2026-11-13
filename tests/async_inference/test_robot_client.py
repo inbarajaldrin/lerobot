@@ -587,3 +587,68 @@ def test_fifo_sudo_targets_only_owned_worker_tid(robot_client, monkeypatch):
     assert commands == [["sudo", "-n", "chrt", "-f", "-p", "10", str(tid)]]
     assert configured["main_thread_policy"] == os.SCHED_OTHER
     assert configured["priority"] == 10
+
+
+def test_observation_rpc_is_sent_from_capture_process():
+    import logging
+    import pickle
+    from concurrent.futures import ThreadPoolExecutor
+
+    import grpc
+
+    from lerobot.async_inference.observation_process import ObservationProcess
+    from lerobot.transport import services_pb2, services_pb2_grpc
+    from lerobot.transport.utils import receive_bytes_in_chunks
+
+    received = Queue()
+
+    class Receiver(services_pb2_grpc.AsyncInferenceServicer):
+        def SendObservations(self, request_iterator, context):  # noqa: N802
+            data = receive_bytes_in_chunks(
+                request_iterator, None, threading.Event(), logging.getLogger("test")
+            )
+            received.put(pickle.loads(data))
+            return services_pb2.Empty()
+
+    server = grpc.server(ThreadPoolExecutor(max_workers=1))
+    services_pb2_grpc.add_AsyncInferenceServicer_to_server(Receiver(), server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    source = None
+    try:
+        source = ObservationProcess(
+            SlowObservationRobotConfig(read_s=0.01), server_address=f"127.0.0.1:{port}"
+        )
+        source.update_cursor(8, 0)
+        result = source.capture("child RPC")
+        observation = received.get(timeout=2)
+        assert result.sent and result.payload is None
+        assert observation.timestep == result.timestep == 9
+        assert observation.timestamp == result.timestamp
+        assert observation.observation["task"] == "child RPC"
+        assert observation.must_go
+    finally:
+        if source:
+            source.close()
+        server.stop(grace=None).wait()
+
+
+def test_cancelled_process_capture_suppresses_pending_observation():
+    from lerobot.async_inference.observation_process import ObservationProcess
+
+    source = ObservationProcess(SlowObservationRobotConfig(read_s=0.2))
+    result = []
+    thread = threading.Thread(target=lambda: result.append(source.capture("cancel")))
+    try:
+        thread.start()
+        time.sleep(0.05)
+        source.cancel_pending_capture()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert result[0].cancelled and result[0].payload is None and not result[0].sent
+        source.resume()
+        assert source.capture("resume").payload is not None
+    finally:
+        thread.join(timeout=2)
+        source.close()
+    assert source.process.exitcode == 0

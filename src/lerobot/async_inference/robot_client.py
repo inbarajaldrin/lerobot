@@ -33,6 +33,7 @@ python src/lerobot/async_inference/robot_client.py \
 ```
 """
 
+import gc
 import logging
 import math
 import os
@@ -157,7 +158,9 @@ class RobotClient:
                 observation_config = deepcopy(config.robot)
                 observation_config.actuate = False
                 self._observation_process = ObservationProcess(
-                    observation_config, timeout_s=config.observation_timeout_s
+                    observation_config,
+                    timeout_s=config.observation_timeout_s,
+                    server_address=config.server_address,
                 )
                 lerobot_features = self._observation_process.features
             else:
@@ -188,6 +191,8 @@ class RobotClient:
         self.latest_action_lock = threading.Lock()
         self.latest_action = -1
         self._last_dispatch_time = 0.0
+        self._last_dispatch_cost_s = 0.0
+        self._last_queue_wait_s = 0.0
         self.action_chunk_size = -1
 
         self._chunk_size_threshold = config.chunk_size_threshold
@@ -452,12 +457,14 @@ class RobotClient:
                 if self._observation_process:
                     self._observation_process.update_cursor(self.latest_action, self.action_queue.qsize())
         get_end = time.perf_counter() - get_start
+        self._last_queue_wait_s = get_end
 
         action_dict = self._action_tensor_to_action_dict(timed_action.get_action())
         # Measure the actuator call, including any wait for queue aggregation and
         # tensor conversion before dispatch, rather than just timer wake-up.
         self._last_dispatch_time = time.perf_counter()
         _performed_action = self.robot.send_action(action_dict)
+        self._last_dispatch_cost_s = time.perf_counter() - self._last_dispatch_time
         if verbose:
             with self.action_queue_lock:
                 current_queue_size = self.action_queue.qsize()
@@ -502,7 +509,10 @@ class RobotClient:
             if stop_event is not None and stop_event.is_set():
                 return raw_observation
             if self._observation_process:
-                self._send_observation_bytes(captured.payload, timestep)
+                if not captured.sent:
+                    if captured.payload is None:
+                        raise RuntimeError("Observation process returned neither data nor a completed send")
+                    self._send_observation_bytes(captured.payload, timestep)
             else:
                 self.send_observation(observation)
             if must_go:
@@ -545,6 +555,7 @@ class RobotClient:
             raise ValueError("max_actions must be positive")
         self.start_barrier.wait()
         if self._observation_process:
+            self._observation_process.resume()
             with self.action_queue_lock, self.latest_action_lock:
                 self._observation_process.update_cursor(self.latest_action, self.action_queue.qsize())
         started = time.perf_counter()
@@ -555,7 +566,23 @@ class RobotClient:
         dispatch_times = deque(maxlen=4096)
         dispatch_steps = deque(maxlen=4096)
         intervals = deque(maxlen=4096)
+        send_costs_ms = deque(maxlen=4096)
+        queue_waits_ms = deque(maxlen=4096)
         dispatch_scheduler = {}
+        gc_events = deque(maxlen=1024)
+        gc_started = [None]
+
+        def gc_trace(phase, info):
+            now = time.perf_counter()
+            if phase == "start":
+                gc_started[0] = (now, info["generation"])
+            elif gc_started[0] is not None:
+                began, generation = gc_started[0]
+                gc_events.append(
+                    {"time_s": began - started, "duration_ms": 1000 * (now - began), "generation": generation}
+                )
+                gc_started[0] = None
+
         counts = {
             "actions_sent": 0,
             "empty_action_ticks": 0,
@@ -607,6 +634,8 @@ class RobotClient:
                     last["last_step"] = step
                     dispatch_times.append(dispatched_at - started)
                     dispatch_steps.append(step)
+                    send_costs_ms.append(1000 * self._last_dispatch_cost_s)
+                    queue_waits_ms.append(1000 * self._last_queue_wait_s)
                     counts["actions_sent"] += 1
                     if max_actions is not None and counts["actions_sent"] >= max_actions:
                         finished.set()
@@ -640,6 +669,7 @@ class RobotClient:
             threading.Thread(target=worker, args=(capture_observations,), name="robot_observations"),
         ]
         started_workers = []
+        gc.callbacks.append(gc_trace)
         try:
             for thread in workers:
                 thread.start()
@@ -649,8 +679,11 @@ class RobotClient:
         finally:
             stopped_at = time.perf_counter()
             finished.set()
+            if self._observation_process:
+                self._observation_process.cancel_pending_capture()
             for thread in started_workers:
                 thread.join()
+            gc.callbacks.remove(gc_trace)
             jitter = sorted(abs(interval - period) * 1000 for interval in intervals)
             span = last["last_dispatch"] - last["first_dispatch"] if counts["actions_sent"] > 1 else 0
             self.control_loop_stats = {
@@ -659,6 +692,7 @@ class RobotClient:
                 "shutdown_wait_s": time.perf_counter() - stopped_at,
                 "target_fps": self.config.fps,
                 "dispatch_scheduler": dispatch_scheduler,
+                "garbage_collections": list(gc_events),
                 "observation_process_pid": self._observation_process.process.pid
                 if self._observation_process
                 else None,
@@ -667,6 +701,8 @@ class RobotClient:
                 "dispatch_jitter_max_ms": max(jitter, default=0.0),
                 "dispatch_times_s": list(dispatch_times),
                 "action_steps": list(dispatch_steps),
+                "send_action_costs_ms": list(send_costs_ms),
+                "queue_waits_ms": list(queue_waits_ms),
                 "action_intervals_s": list(intervals),
             }
         if not errors.empty():

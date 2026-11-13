@@ -12,7 +12,11 @@ import traceback
 from contextlib import suppress
 from dataclasses import dataclass
 
+import grpc
+
 from lerobot.robots import make_robot_from_config
+from lerobot.transport import services_pb2, services_pb2_grpc
+from lerobot.transport.utils import grpc_channel_options, send_bytes_in_chunks
 
 from .helpers import TimedObservation, map_robot_keys_to_lerobot_features
 
@@ -22,17 +26,23 @@ class CapturedObservation:
     timestep: int
     timestamp: float
     must_go: bool
-    payload: bytes
+    payload: bytes | None
     capture_s: float
+    sent: bool = False
+    cancelled: bool = False
 
 
-def _capture_worker(connection, robot_config, cursor, must_go):
+def _capture_worker(connection, robot_config, cursor, must_go, cancel_capture, server_address, timeout_s):
     # Each process owns its ROS singleton; names distinguish their participants.
     os.environ["LEROBOT_ROS2_NODE_NAME"] = f"lerobot_observations_{os.getpid()}"
     robot = None
+    channel = None
     try:
         robot = make_robot_from_config(robot_config)
         robot.connect()
+        if server_address is not None:
+            channel = grpc.insecure_channel(server_address, grpc_channel_options())
+            stub = services_pb2_grpc.AsyncInferenceStub(channel)
         connection.send(("ready", map_robot_keys_to_lerobot_features(robot)))
         while True:
             task = connection.recv()
@@ -44,18 +54,34 @@ def _capture_worker(connection, robot_config, cursor, must_go):
             started = time.perf_counter()
             raw = robot.get_observation()
             raw["task"] = task
+            if cancel_capture.is_set():
+                connection.send(
+                    CapturedObservation(
+                        step, timestamp, False, None, time.perf_counter() - started, cancelled=True
+                    )
+                )
+                continue
             with cursor.get_lock():
                 force = must_go.is_set() and cursor[1] == 0
             observation = TimedObservation(timestamp=timestamp, timestep=step, observation=raw, must_go=force)
             payload = pickle.dumps(observation, protocol=pickle.HIGHEST_PROTOCOL)  # nosec
+            sent = False
+            if channel is not None:
+                chunks = send_bytes_in_chunks(payload, services_pb2.Observation, silent=True)
+                stub.SendObservations(chunks, timeout=timeout_s)
+                payload = None  # images and protobuf serialization stay out of the actuator process
+                sent = True
             connection.send(
-                CapturedObservation(step, timestamp, force, payload, time.perf_counter() - started)
+                CapturedObservation(step, timestamp, force, payload, time.perf_counter() - started, sent)
             )
+
     except (EOFError, BrokenPipeError):
         pass
     except Exception:
         connection.send(("error", traceback.format_exc()))
     finally:
+        if channel is not None:
+            channel.close()
         if robot is not None:
             robot.disconnect()
         connection.close()
@@ -64,20 +90,30 @@ def _capture_worker(connection, robot_config, cursor, must_go):
 class ObservationProcess:
     """One persistent sensor process, with an atomic action cursor and idle pause.
 
-    ``capture`` returns encoded bytes without decoding images in the parent.
+    With a server address, capture and the entire observation RPC stay in the
+    child; only metadata returns. Capture-only consumers receive encoded bytes.
     After its request thread joins, the worker is idle and episode reset can
     safely change the cursor. ``close`` joins only this owned child process.
     """
 
-    def __init__(self, robot_config, timeout_s=5.0, startup_timeout_s=30.0):
+    def __init__(self, robot_config, timeout_s=5.0, startup_timeout_s=30.0, server_address=None):
         context = multiprocessing.get_context("spawn")
         self.cursor = context.Array("q", [-1, 0])
         self.must_go = context.Event()
         self.must_go.set()
+        self.cancel_capture = context.Event()
         self.connection, child = context.Pipe()
         self.process = context.Process(
             target=_capture_worker,
-            args=(child, robot_config, self.cursor, self.must_go),
+            args=(
+                child,
+                robot_config,
+                self.cursor,
+                self.must_go,
+                self.cancel_capture,
+                server_address,
+                timeout_s,
+            ),
             name="robot_observation_process",
             daemon=True,
         )
@@ -109,7 +145,14 @@ class ObservationProcess:
             raise RuntimeError(f"Observation capture failed: {result}")
         return result
 
+    def resume(self):
+        self.cancel_capture.clear()
+
+    def cancel_pending_capture(self):
+        self.cancel_capture.set()
+
     def close(self):
+        self.cancel_pending_capture()
         if self.process.is_alive():
             with suppress(EOFError, OSError):
                 self.connection.send(None)
