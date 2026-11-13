@@ -35,11 +35,14 @@ python src/lerobot/async_inference/robot_client.py \
 
 import logging
 import math
+import os
 import pickle  # nosec
+import subprocess
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import asdict
 from pprint import pformat
 from queue import Empty, Queue
@@ -87,6 +90,43 @@ from .helpers import (
     map_robot_keys_to_lerobot_features,
     visualize_action_queue_size,
 )
+from .observation_process import ObservationProcess
+
+
+def _configure_dispatch_thread(config):
+    """Elevate only this owned worker TID; leave other threads/processes normal."""
+    tid = threading.get_native_id()
+    priority = config.dispatch_fifo_priority
+    if priority:
+        if not hasattr(os, "sched_setscheduler") or tid == os.getpid():
+            raise RuntimeError("FIFO scheduling requires a Linux action worker thread")
+        try:
+            os.sched_setscheduler(tid, os.SCHED_FIFO, os.sched_param(priority))
+        except PermissionError as error:
+            if not config.dispatch_fifo_sudo:
+                raise RuntimeError(
+                    "FIFO permission denied; enable dispatch_fifo_sudo or set priority=0"
+                ) from error
+            result = subprocess.run(
+                ["sudo", "-n", "chrt", "-f", "-p", str(priority), str(tid)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(f"Cannot set dispatch FIFO priority: {result.stderr.strip()}") from error
+        if os.sched_getscheduler(tid) != os.SCHED_FIFO or os.sched_getparam(tid).sched_priority != priority:
+            raise RuntimeError("Dispatch FIFO priority was not applied")
+    return {
+        "tid": tid,
+        "requested_priority": priority,
+        "policy": os.sched_getscheduler(tid) if hasattr(os, "sched_getscheduler") else None,
+        "priority": os.sched_getparam(tid).sched_priority if hasattr(os, "sched_getparam") else None,
+        "main_thread_policy": os.sched_getscheduler(os.getpid())
+        if hasattr(os, "sched_getscheduler")
+        else None,
+    }
 
 
 class RobotClient:
@@ -101,10 +141,30 @@ class RobotClient:
         """
         # Store configuration
         self.config = config
-        self.robot = make_robot_from_config(config.robot)
+        self._observation_process = None
+        actuator_config = config.robot
+        if config.observation_process:
+            if config.robot.type != "so101_ros2":
+                raise ValueError(
+                    "observation_process requires so101_ros2; shared serial devices cannot be opened twice"
+                )
+            actuator_config = deepcopy(config.robot)
+            actuator_config.cameras = {}
+        self.robot = make_robot_from_config(actuator_config)
         self.robot.connect()
-
-        lerobot_features = map_robot_keys_to_lerobot_features(self.robot)
+        try:
+            if config.observation_process:
+                observation_config = deepcopy(config.robot)
+                observation_config.actuate = False
+                self._observation_process = ObservationProcess(
+                    observation_config, timeout_s=config.observation_timeout_s
+                )
+                lerobot_features = self._observation_process.features
+            else:
+                lerobot_features = map_robot_keys_to_lerobot_features(self.robot)
+        except BaseException:
+            self.robot.disconnect()
+            raise
 
         # Use environment variable if server_address is not provided in config
         self.server_address = config.server_address
@@ -143,7 +203,7 @@ class RobotClient:
         self.logger.info("Robot connected and ready")
 
         # Use an event for thread-safe coordination
-        self.must_go = threading.Event()
+        self.must_go = self._observation_process.must_go if self._observation_process else threading.Event()
         self.must_go.set()  # Initially set - observations qualify for direct processing
 
     @property
@@ -184,7 +244,11 @@ class RobotClient:
         """Stop the robot client"""
         self.shutdown_event.set()
 
-        self.robot.disconnect()
+        try:
+            if self._observation_process:
+                self._observation_process.close()
+        finally:
+            self.robot.disconnect()
         self.logger.debug("Robot disconnected")
 
         self.channel.close()
@@ -207,6 +271,10 @@ class RobotClient:
         serialize_time = time.perf_counter() - start_time
         self.logger.debug(f"Observation serialization time: {serialize_time:.6f}s")
 
+        return self._send_observation_bytes(observation_bytes, obs.get_timestep())
+
+    def _send_observation_bytes(self, observation_bytes: bytes, timestep: int) -> bool:
+        """Forward encoded observations without decoding camera data in this process."""
         try:
             observation_iterator = send_bytes_in_chunks(
                 observation_bytes,
@@ -215,13 +283,12 @@ class RobotClient:
                 silent=True,
             )
             _ = self.stub.SendObservations(observation_iterator, timeout=self.config.observation_timeout_s)
-            obs_timestep = obs.get_timestep()
-            self.logger.debug(f"Sent observation #{obs_timestep} | ")
+            self.logger.debug(f"Sent observation #{timestep} | ")
 
             return True
 
         except grpc.RpcError as e:
-            self.logger.error(f"Error sending observation #{obs.get_timestep()}: {e}")
+            self.logger.error(f"Error sending observation #{timestep}: {e}")
             return False
 
     def _inspect_action_queue(self):
@@ -267,6 +334,8 @@ class RobotClient:
                         )
                     )
             self.action_queue = future_action_queue
+            if self._observation_process:
+                self._observation_process.update_cursor(latest_action, self.action_queue.qsize())
 
     def receive_actions(self, verbose: bool = False):
         """Receive actions from the policy server"""
@@ -380,6 +449,8 @@ class RobotClient:
             timed_action = self.action_queue.get_nowait()
             with self.latest_action_lock:
                 self.latest_action = timed_action.get_timestep()
+                if self._observation_process:
+                    self._observation_process.update_cursor(self.latest_action, self.action_queue.qsize())
         get_end = time.perf_counter() - get_start
 
         action_dict = self._action_tensor_to_action_dict(timed_action.get_action())
@@ -412,59 +483,44 @@ class RobotClient:
         self, task: str, verbose: bool = False, stop_event: threading.Event | None = None
     ) -> RawObservation:
         try:
-            # Get serialized observation bytes from the function
             start_time = time.perf_counter()
-
-            # The robot reads joint state before blocking on its cameras. Anchor
-            # RTC to that capture start: dispatch continues while images arrive.
-            with self.latest_action_lock:
-                latest_action = self.latest_action
-                capture_timestamp = time.time()
-            raw_observation: RawObservation = self.robot.get_observation()
-            raw_observation["task"] = task
+            raw_observation = None
+            if self._observation_process:
+                captured = self._observation_process.capture(task)
+                timestep, timestamp, must_go = captured.timestep, captured.timestamp, captured.must_go
+            else:
+                with self.latest_action_lock:
+                    timestep = self.latest_action + 1
+                    timestamp = time.time()
+                raw_observation = self.robot.get_observation()
+                raw_observation["task"] = task
+                with self.action_queue_lock:
+                    must_go = self.must_go.is_set() and self.action_queue.empty()
+                observation = TimedObservation(
+                    timestamp=timestamp, observation=raw_observation, timestep=timestep, must_go=must_go
+                )
             if stop_event is not None and stop_event.is_set():
                 return raw_observation
-
-            observation = TimedObservation(
-                timestamp=capture_timestamp,  # wall time pairs with the capture-start action index
-                observation=raw_observation,
-                # Observation follows the last executed action. Its prediction starts
-                # at the NEXT unexecuted step, matching RTC prefix alignment.
-                timestep=latest_action + 1,
-            )
-
-            obs_capture_time = time.perf_counter() - start_time
-
-            # If there are no actions left in the queue, the observation must go through processing!
-            with self.action_queue_lock:
-                observation.must_go = self.must_go.is_set() and self.action_queue.empty()
-                current_queue_size = self.action_queue.qsize()
-
-            _ = self.send_observation(observation)
-
-            self.logger.debug(f"QUEUE SIZE: {current_queue_size} (Must go: {observation.must_go})")
-            if observation.must_go:
-                # must-go event will be set again after receiving actions
+            if self._observation_process:
+                self._send_observation_bytes(captured.payload, timestep)
+            else:
+                self.send_observation(observation)
+            if must_go:
                 self.must_go.clear()
-
             if verbose:
-                # Calculate comprehensive FPS metrics
-                fps_metrics = self.fps_tracker.calculate_fps_metrics(observation.get_timestamp())
-
+                metrics = self.fps_tracker.calculate_fps_metrics(timestamp)
                 self.logger.info(
-                    f"Obs #{observation.get_timestep()} | "
-                    f"Avg FPS: {fps_metrics['avg_fps']:.2f} | "
-                    f"Target: {fps_metrics['target_fps']:.2f}"
+                    "Obs #%s | Avg FPS %.2f | Target %.2f | Capture/send %.3fs",
+                    timestep,
+                    metrics["avg_fps"],
+                    metrics["target_fps"],
+                    time.perf_counter() - start_time,
                 )
-
-                self.logger.debug(
-                    f"Ts={observation.get_timestamp():.6f} | Capturing observation took {obs_capture_time:.6f}s"
-                )
-
             return raw_observation
-
-        except Exception as e:
-            self.logger.error(f"Error in observation sender: {e}")
+        except Exception as error:
+            self.logger.error(f"Error in observation sender: {error}")
+            if self._observation_process:
+                raise  # an isolated worker failure must stop dispatch rather than hide stale state
 
     def control_loop(
         self,
@@ -488,6 +544,9 @@ class RobotClient:
         if max_actions is not None and max_actions <= 0:
             raise ValueError("max_actions must be positive")
         self.start_barrier.wait()
+        if self._observation_process:
+            with self.action_queue_lock, self.latest_action_lock:
+                self._observation_process.update_cursor(self.latest_action, self.action_queue.qsize())
         started = time.perf_counter()
         deadline = started + max_duration_s if max_duration_s is not None else math.inf
         period = self.config.environment_dt
@@ -496,10 +555,13 @@ class RobotClient:
         dispatch_times = deque(maxlen=4096)
         dispatch_steps = deque(maxlen=4096)
         intervals = deque(maxlen=4096)
+        dispatch_scheduler = {}
         counts = {
             "actions_sent": 0,
             "empty_action_ticks": 0,
             "missed_action_ticks": 0,
+            "missed_action_ticks_after_startup": 0,
+            "empty_action_ticks_after_startup": 0,
             "nonmonotonic_action_steps": 0,
             "observations_captured": 0,
         }
@@ -520,7 +582,8 @@ class RobotClient:
             )
 
         def dispatch_actions():
-            next_tick = started
+            dispatch_scheduler.update(_configure_dispatch_thread(self.config))
+            next_tick = time.perf_counter()
             while not cancelled():
                 if finished.wait(max(0, next_tick - time.perf_counter())) or cancelled():
                     break
@@ -530,6 +593,8 @@ class RobotClient:
                     last["action"] = self.control_loop_action(verbose)
                 except Empty:
                     counts["empty_action_ticks"] += 1
+                    if counts["actions_sent"]:
+                        counts["empty_action_ticks_after_startup"] += 1
                 else:
                     dispatched_at = self._last_dispatch_time
                     step = self.latest_action
@@ -551,6 +616,8 @@ class RobotClient:
                 if next_tick < now:
                     missed = math.floor((now - next_tick) / period) + 1
                     counts["missed_action_ticks"] += missed
+                    if counts["actions_sent"]:
+                        counts["missed_action_ticks_after_startup"] += missed
                     next_tick += missed * period
 
         def capture_observations():
@@ -591,6 +658,10 @@ class RobotClient:
                 "duration_s": stopped_at - started,
                 "shutdown_wait_s": time.perf_counter() - stopped_at,
                 "target_fps": self.config.fps,
+                "dispatch_scheduler": dispatch_scheduler,
+                "observation_process_pid": self._observation_process.process.pid
+                if self._observation_process
+                else None,
                 "effective_action_fps": (counts["actions_sent"] - 1) / span if span else 0.0,
                 "dispatch_jitter_p95_ms": jitter[math.ceil(0.95 * len(jitter)) - 1] if jitter else 0.0,
                 "dispatch_jitter_max_ms": max(jitter, default=0.0),
@@ -632,6 +703,8 @@ def async_client(cfg: RobotClientConfig):
             if cfg.debug_visualize_queue_size:
                 visualize_action_queue_size(client.action_queue_size)
             client.logger.info("Client stopped")
+    else:
+        client.stop()
 
 
 if __name__ == "__main__":

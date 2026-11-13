@@ -424,6 +424,8 @@ class SO101ROS2Robot(Robot):
             except Exception as e:  # nosec B110
                 logger.warning("%s: camera %r disconnect failed: %s", self, cam, e)
         self._is_connected = False
-        # Do not tear down the shared rclpy node here; the camera singleton
-        # owns that lifecycle (last camera disconnect triggers shutdown).
+        if not self.cameras:
+            ROS2Camera._maybe_shutdown_rclpy()
+        # The singleton owns teardown: the last camera closes it, or the
+        # action-only robot releases it after its state/action handles above.
         logger.info("%s disconnected.", self)

@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
 
@@ -33,6 +34,9 @@ import torch
 pytest.importorskip("grpc")
 pytest.importorskip("serial", reason="pyserial is required (install lerobot[hardware])")
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
+RobotConfig = pytest.importorskip("lerobot.robots.config").RobotConfig
+MockRobot = pytest.importorskip("tests.mocks.mock_robot").MockRobot
+MockRobotConfig = pytest.importorskip("tests.mocks.mock_robot").MockRobotConfig
 
 # -----------------------------------------------------------------------------
 # Test fixtures
@@ -444,3 +448,142 @@ def test_dispatch_failure_stops_both_workers(robot_client, monkeypatch):
     with pytest.raises(RuntimeError, match="dispatch refused"):
         client.control_loop("failure", max_duration_s=1.0)
     assert not any(t.name in {"robot_action_dispatch", "robot_observations"} for t in threading.enumerate())
+
+
+# A real plugin-shaped device for spawned observation tests. No ROS or model.
+
+
+@RobotConfig.register_subclass("slow_observation_unit")
+@dataclass
+class SlowObservationRobotConfig(MockRobotConfig):
+    read_s: float = 0.08
+    fail_capture: bool = False
+
+
+class SlowObservationRobot(MockRobot):
+    def get_observation(self):
+        if self.config.fail_capture:
+            raise RuntimeError("camera decode failed")
+        deadline = time.perf_counter() + self.config.read_s
+        while time.perf_counter() < deadline:
+            pass  # emulate Python decode work that would compete for the GIL
+        return super().get_observation()
+
+
+def test_spawned_observation_cursor_payload_pause_and_shutdown():
+    import pickle
+
+    from lerobot.async_inference.observation_process import ObservationProcess
+
+    source = ObservationProcess(SlowObservationRobotConfig(read_s=0.01))
+    try:
+        source.update_cursor(7, 0)
+        captured = source.capture("first task")
+        raw = pickle.loads(captured.payload)
+        assert raw.timestep == captured.timestep == 8
+        assert raw.timestamp == captured.timestamp
+        assert raw.must_go and captured.must_go
+        assert raw.observation["task"] == "first task"
+        assert source.process.pid != os.getpid()
+        source.update_cursor(20, 4)
+        captured = source.capture("second task")
+        raw = pickle.loads(captured.payload)
+        assert raw.timestep == 21 and not raw.must_go
+        assert raw.observation["task"] == "second task"
+        assert not source.connection.poll(0.1)  # no unsolicited capture while paused
+    finally:
+        source.close()
+    assert not source.process.is_alive() and source.process.exitcode == 0
+
+
+def test_spawned_capture_failure_is_visible_and_child_is_joined():
+    from lerobot.async_inference.observation_process import ObservationProcess
+
+    source = ObservationProcess(SlowObservationRobotConfig(fail_capture=True))
+    try:
+        with pytest.raises(RuntimeError, match="camera decode failed"):
+            source.capture("fail")
+    finally:
+        source.close()
+    assert not source.process.is_alive() and source.process.exitcode == 0
+
+
+def test_cpu_bound_observation_process_keeps_dispatch_clock(robot_client, monkeypatch):
+    import pickle
+
+    from lerobot.async_inference.helpers import TimedAction
+    from lerobot.async_inference.observation_process import ObservationProcess
+
+    client = robot_client
+    source = ObservationProcess(SlowObservationRobotConfig(read_s=0.08))
+    client._observation_process = source
+    client.must_go = source.must_go
+    client.config.fps = 17.4
+    client.start_barrier = threading.Barrier(1)
+    client.action_chunk_size = 50
+    client._chunk_size_threshold = 1.0
+    for action in _make_actions(time.time(), 0, 50):
+        client.action_queue.put(action)
+    observed_steps = []
+
+    def reply(payload, timestep):
+        observation = pickle.loads(payload)
+        assert observation.timestep == timestep
+        observed_steps.append(timestep)
+        incoming = [
+            TimedAction(
+                timestamp=observation.timestamp + i / 17.4, timestep=timestep + i, action=torch.zeros(6)
+            )
+            for i in range(50)
+        ]
+        client._aggregate_action_queues(incoming, client.config.aggregate_fn)
+        return True
+
+    monkeypatch.setattr(client, "_send_observation_bytes", reply)
+    client.control_loop("CPU decode in child", max_duration_s=3.0)
+    stats = client.control_loop_stats
+    assert stats["effective_action_fps"] == pytest.approx(17.4, abs=0.5)
+    assert stats["missed_action_ticks_after_startup"] == 0
+    assert stats["nonmonotonic_action_steps"] == 0
+    assert len(observed_steps) > 10
+    assert source.process.is_alive()  # persistent, idle between episodes
+    client.stop()
+    assert not source.process.is_alive() and source.process.exitcode == 0
+
+
+def test_fifo_configuration_cannot_elevate_main_thread(robot_client, monkeypatch):
+    from lerobot.async_inference.robot_client import _configure_dispatch_thread
+
+    robot_client.config.dispatch_fifo_priority = 10
+    monkeypatch.setattr(threading, "get_native_id", os.getpid)
+    calls = []
+    monkeypatch.setattr(os, "sched_setscheduler", lambda *args: calls.append(args))
+    with pytest.raises(RuntimeError, match="action worker"):
+        _configure_dispatch_thread(robot_client.config)
+    assert not calls
+
+
+def test_fifo_sudo_targets_only_owned_worker_tid(robot_client, monkeypatch):
+    from types import SimpleNamespace
+
+    import lerobot.async_inference.robot_client as module
+
+    tid = os.getpid() + 100000
+    robot_client.config.dispatch_fifo_priority = 10
+    robot_client.config.dispatch_fifo_sudo = True
+    monkeypatch.setattr(threading, "get_native_id", lambda: tid)
+
+    def denied(*args):
+        raise PermissionError("permission")
+
+    monkeypatch.setattr(os, "sched_setscheduler", denied)
+    monkeypatch.setattr(os, "sched_getscheduler", lambda pid: os.SCHED_FIFO if pid == tid else os.SCHED_OTHER)
+    monkeypatch.setattr(os, "sched_getparam", lambda pid: SimpleNamespace(sched_priority=10))
+    commands = []
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda cmd, **kwargs: commands.append(cmd) or SimpleNamespace(returncode=0)
+    )
+    configured = module._configure_dispatch_thread(robot_client.config)
+    assert commands == [["sudo", "-n", "chrt", "-f", "-p", "10", str(tid)]]
+    assert configured["main_thread_policy"] == os.SCHED_OTHER
+    assert configured["priority"] == 10

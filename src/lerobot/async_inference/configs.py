@@ -131,6 +131,16 @@ class RobotClientConfig:
         default=5.0, metadata={"help": "Observation RPC deadline; bounds worker shutdown"}
     )
 
+    observation_process: bool = field(
+        default=False, metadata={"help": "Isolate ROS2 camera capture/encoding"}
+    )
+    dispatch_fifo_priority: int = field(
+        default=0, metadata={"help": "Linux action-thread FIFO priority; 0 disables"}
+    )
+    dispatch_fifo_sudo: bool = field(
+        default=False, metadata={"help": "Allow sudo -n chrt for the owned action TID"}
+    )
+
     # Device configuration
     policy_device: str = field(default="cpu", metadata={"help": "Device for policy inference"})
     client_device: str = field(
@@ -183,6 +193,9 @@ class RobotClientConfig:
         if self.fps <= 0:
             raise ValueError(f"fps must be positive, got {self.fps}")
 
+        if not 0 <= self.dispatch_fifo_priority <= 99:
+            raise ValueError("dispatch_fifo_priority must be between 0 and 99")
+
         if self.observation_timeout_s <= 0:
             raise ValueError("observation_timeout_s must be positive")
 
@@ -201,6 +214,9 @@ class RobotClientConfig:
         return {
             "server_address": self.server_address,
             "observation_timeout_s": self.observation_timeout_s,
+            "observation_process": self.observation_process,
+            "dispatch_fifo_priority": self.dispatch_fifo_priority,
+            "dispatch_fifo_sudo": self.dispatch_fifo_sudo,
             "policy_type": self.policy_type,
             "pretrained_name_or_path": self.pretrained_name_or_path,
             "policy_device": self.policy_device,

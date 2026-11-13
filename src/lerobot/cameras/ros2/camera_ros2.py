@@ -42,6 +42,7 @@ it down.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -220,7 +221,7 @@ class ROS2Camera(Camera):
                 rclpy.init()
                 cls._rclpy_initialized = True
             if cls._rclpy_node is None:
-                cls._rclpy_node = rclpy.create_node("lerobot_ros2_camera_node")
+                cls._rclpy_node = rclpy.create_node(os.environ.get("LEROBOT_ROS2_NODE_NAME", "lerobot_ros2_camera_node"))
                 cls._stop_event = threading.Event()
             if cls._spin_thread is None or not cls._spin_thread.is_alive():
                 assert cls._stop_event is not None
