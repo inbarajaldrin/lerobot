@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Optional
 
 from lerobot.cameras import CameraConfig
 
@@ -66,7 +67,7 @@ class SO101ROS2RobotConfig(RobotConfig):
     # meta/info.json (normally taken from Robot.name = "so101_ros2"). Set to
     # "so_follower" for parity recordings so schema-equality with the real HF
     # dataset holds.
-    robot_type: str | None = None
+    robot_type: Optional[str] = None
 
     # ---- Inference-time actuation (opt-in) ---------------------------------
     # When `actuate=True`, `send_action()` actually drives the sim arm by
