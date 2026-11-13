@@ -240,37 +240,29 @@ class RobotClient:
                 return x2
 
         future_action_queue = Queue()
+        # Dequeue/index advancement and queue replacement share this lock, so a
+        # chunk cannot reintroduce an action while it is being dispatched.
         with self.action_queue_lock:
-            internal_queue = self.action_queue.queue
-
-        current_action_queue = {action.get_timestep(): action.get_action() for action in internal_queue}
-
-        for new_action in incoming_actions:
+            current_action_queue = {
+                action.get_timestep(): action.get_action() for action in self.action_queue.queue
+            }
             with self.latest_action_lock:
                 latest_action = self.latest_action
-
-            # New action is older than the latest action in the queue, skip it
-            if new_action.get_timestep() <= latest_action:
-                continue
-
-            # If the new action's timestep is not in the current action queue, add it directly
-            elif new_action.get_timestep() not in current_action_queue:
-                future_action_queue.put(new_action)
-                continue
-
-            # If the new action's timestep is in the current action queue, aggregate it
-            # TODO: There is probably a way to do this with broadcasting of the two action tensors
-            future_action_queue.put(
-                TimedAction(
-                    timestamp=new_action.get_timestamp(),
-                    timestep=new_action.get_timestep(),
-                    action=aggregate_fn(
-                        current_action_queue[new_action.get_timestep()], new_action.get_action()
-                    ),
-                )
-            )
-
-        with self.action_queue_lock:
+            for new_action in incoming_actions:
+                if new_action.get_timestep() <= latest_action:
+                    continue
+                if new_action.get_timestep() not in current_action_queue:
+                    future_action_queue.put(new_action)
+                else:
+                    future_action_queue.put(
+                        TimedAction(
+                            timestamp=new_action.get_timestamp(),
+                            timestep=new_action.get_timestep(),
+                            action=aggregate_fn(
+                                current_action_queue[new_action.get_timestep()], new_action.get_action()
+                            ),
+                        )
+                    )
             self.action_queue = future_action_queue
 
     def receive_actions(self, verbose: bool = False):
@@ -383,14 +375,13 @@ class RobotClient:
             self.action_queue_size.append(self.action_queue.qsize())
             # Get action from queue
             timed_action = self.action_queue.get_nowait()
+            with self.latest_action_lock:
+                self.latest_action = timed_action.get_timestep()
         get_end = time.perf_counter() - get_start
 
         _performed_action = self.robot.send_action(
             self._action_tensor_to_action_dict(timed_action.get_action())
         )
-        with self.latest_action_lock:
-            self.latest_action = timed_action.get_timestep()
-
         if verbose:
             with self.action_queue_lock:
                 current_queue_size = self.action_queue.qsize()

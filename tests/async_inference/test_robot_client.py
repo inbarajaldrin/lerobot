@@ -269,3 +269,20 @@ def test_robot_client_registers_builtin_robot_types():
             f"Ensure the corresponding module is imported in robot_client.py. "
             f"Known choices: {sorted(known_choices)}"
         )
+
+
+def test_chunk_arriving_during_dispatch_cannot_requeue_current_action(robot_client, monkeypatch):
+    incoming = _make_actions(start_ts=time.time(), start_t=0, count=3)
+    robot_client.latest_action = -1
+    robot_client.action_queue.put(incoming[0])
+    robot_client.action_queue.put(incoming[1])
+
+    def send_with_concurrent_chunk(action):
+        # The receiver can finish a chunk while the ROS action call is pending.
+        robot_client._aggregate_action_queues(incoming)
+        return action
+
+    monkeypatch.setattr(robot_client.robot, "send_action", send_with_concurrent_chunk)
+    robot_client.control_loop_action()
+    assert robot_client.latest_action == 0
+    assert [action.get_timestep() for action in robot_client.action_queue.queue] == [1, 2]
